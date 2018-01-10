@@ -1,0 +1,1964 @@
+#include "DataFormats/Luminosity/interface/LumiDetails.h"
+#include "DataFormats/Scalers/interface/LumiScalers.h"
+
+#include "DataFormats/Math/interface/deltaR.h"	
+#include "DataFormats/Common/interface/TriggerResults.h"	
+#include "FWCore/Common/interface/TriggerNames.h"		
+
+#include "DataFormats/VertexReco/interface/Vertex.h"
+#include "DataFormats/VertexReco/interface/VertexFwd.h"
+
+#include "FWCore/ServiceRegistry/interface/Service.h"
+#include "CommonTools/UtilAlgos/interface/TFileService.h"
+
+#include "FWCore/Framework/interface/MakerMacros.h"
+#include "FWCore/Framework/interface/LuminosityBlock.h"
+
+#include "Geometry/Records/interface/GlobalTrackingGeometryRecord.h"
+#include "Geometry/CommonDetUnit/interface/GlobalTrackingGeometry.h"
+#include "Geometry/CommonDetUnit/interface/GeomDet.h"
+
+//PFJet PFMET CaloJeT
+#include "DataFormats/Common/interface/Handle.h"
+#include "FWCore/Framework/interface/ESHandle.h"
+
+#include "DataFormats/BTauReco/interface/TrackCountingTagInfo.h"
+#include "DataFormats/BTauReco/interface/JetTag.h"
+
+#include <DataFormats/PatCandidates/interface/MET.h>
+#include <DataFormats/PatCandidates/interface/Muon.h>
+#include <DataFormats/PatCandidates/interface/Electron.h>
+
+#include "CMGTools/External/interface/PileupJetIdentifier.h"
+#include "CMGTools/External/interface/PileupJetIdAlgo.h"
+#include "DataFormats/JetReco/interface/Jet.h"
+#include "DataFormats/JetReco/interface/JetTracksAssociation.h"
+#include "CondFormats/JetMETObjects/interface/JetCorrectorParameters.h"
+#include "JetMETCorrections/Objects/interface/JetCorrectionsRecord.h"
+#include "CondFormats/JetMETObjects/interface/JetCorrectionUncertainty.h"
+
+// Isolation
+#include "DataFormats/RecoCandidate/interface/IsoDeposit.h"
+
+#include <DataFormats/PatCandidates/interface/Jet.h>
+#include "DataFormats/HepMCCandidate/interface/GenParticle.h"
+
+#include "SimDataFormats/GeneratorProducts/interface/GenEventInfoProduct.h"
+#include "LHAPDF/LHAPDF.h"
+#include "SimDataFormats/PileupSummaryInfo/interface/PileupSummaryInfo.h" 
+
+#include "PhysicsTools/Utilities/interface/LumiReWeighting.h"
+#include "UserCode/federica/interface/MuScleFitCorrector.h"
+
+#include <Math/GenVector/PxPyPzE4D.h>
+
+#include "UserCode/federica/interface/root_map.C"
+#include "UserCode/federica/interface/HmumuNtuple_pat.h"
+
+HmumuNtuple_pat::HmumuNtuple_pat(const edm::ParameterSet& pset)
+{    
+  //get parameters from the configuration file
+  //names of the different event collections
+  beamSpotTag_            = pset.getParameter<edm::InputTag>("beamSpotTag");
+  hltresults_             = pset.getParameter<edm::InputTag>("hltresults");
+  PrimaryVertexTag_       = pset.getParameter<edm::InputTag>("PrimaryVertexTag");
+  staMuLabel_             = pset.getParameter<edm::InputTag>("staMuLabel");
+  PFEleCollection_        = pset.getParameter<edm::InputTag>("labelPFEleCollection");
+  PFJetCollection_        = pset.getParameter<edm::InputTag>("labelPFJetCollection");
+  PFMETCollection_        = pset.getParameter<edm::InputTag>("labelPFMETCollection");
+  GenParticleCollection_  = pset.getParameter<edm::InputTag>("labelGenParticleCollection");
+  PileupSrc_              = pset.getParameter<edm::InputTag>("labelPileupSrc");
+  outFile_                = pset.getParameter<std::string>("outputFile");
+  debug_                  = pset.getParameter<bool>("debug");
+  MCtruth_                = pset.getParameter<bool>("MCtruth");
+  youwantAnalysis_        = pset.getParameter<bool>("youwantAnalysis");
+  youwantNTuples_         = pset.getParameter<bool>("youwantNTuples");
+  Analyze2012_            = pset.getParameter<bool>("Analyze2012");
+  datafilepath            = pset.getParameter<std::string>("DataFilePath");
+  muonMatch_              = pset.getParameter<std::string>("labelmuonMatch");
+ 
+  initialize_Tree_variables();
+
+  //counters
+  ihlt              = 0;
+ 
+  ivtx              = 0;
+
+
+  imuons            = 0;
+  GlobalMuons       = 0;
+  TrackerMuons      = 0;
+  StandAloneMuons   = 0;
+
+  ipfelectrons      = 0;     
+
+  ipfjets           = 0;
+  bTagJetsHE        = 0;
+  bTagJetsHP        = 0;
+  bTagJetsCSV       = 0;
+  
+  ipfmets           = 0;
+
+  iGenP             = 0;
+
+  iBeam             = 0;
+
+  //  fitParametersFile_ = "/afs/cern.ch/user/f/federica/scratch0/CMSSW_5_3_3_patch2/src/UserCode/federica/interface/MuScleFit_2011_MC_42X.txt";
+  fitParametersFile_ = "/afs/cern.ch/user/f/federica/scratch0/CMSSW_5_3_3_patch2/src/UserCode/federica/interface/MuScleFit_2012_DATA_53X.txt";
+  MuScleFitCorrector* corrector_ = new MuScleFitCorrector(fitParametersFile_);
+  
+  if(MCtruth_){   //inizializza pileup reweighting
+    
+    // initializations
+    LHAPDF::initPDFSet(1,"MSTW2008nlo68cl.LHgrid");
+    LHAPDF::initPDFSet(2,"NNPDF20_100.LHgrid");  // PdfSetNames 
+    LHAPDF::initPDFSet(3,"CT10.LHgrid"); 
+    
+    //PU dist of START44_V10 e START44_V9
+    Double_t Fall2011[50] = {0.003388501,0.010357558,0.024724258,0.042348605,0.058279812,0.068851751,0.072914824,0.071579609,0.066811668,0.060672356,0.054528356,0.04919354,0.044886042,0.041341896,0.0384679,0.035871463,0.03341952,0.030915649,0.028395374,0.025798107,0.023237445,0.020602754,0.0180688,0.015559693,0.013211063,0.010964293,0.008920993,0.007080504,0.005499239,0.004187022,0.003096474,0.002237361,0.001566428,0.001074149,0.000721755,0.000470838,0.00030268,0.000184665,0.000112883,6.74043E-05,3.82178E-05,2.22847E-05,1.20933E-05,6.96173E-06,3.4689E-06,1.96172E-06,8.49283E-07,5.02393E-07,2.15311E-07,9.56938E-08};
+    
+    //    double Fall2011_InTime[55] = {
+    double Fall2011_InTime[50] = {
+      0.014583699,
+      0.025682975,
+      0.038460562,
+      0.049414536,
+      0.056931087,
+      0.061182816,
+      0.062534625,
+      0.061476918,
+      0.058677499,
+      0.055449877,
+      0.051549051,
+      0.047621024,
+      0.043923799,
+      0.040569076,
+      0.037414654,
+      0.034227033,
+      0.031437714,
+      0.028825596,
+      0.026218978,
+      0.023727061,
+      0.021365645,
+      0.01918743,
+      0.016972815,
+      0.014920601,
+      0.013038989,
+      0.011293777,
+      0.009612465,
+      0.008193556,
+      0.006888047,
+      0.005715239,
+      0.004711232,
+      0.003869926,
+      0.003154521,
+      0.002547417,
+      0.002024714,
+      0.001574411,
+      0.001245808,
+      0.000955206,
+      0.000735305,
+      0.000557304,
+      0.000412503,
+      0.000305502,
+      0.000231002,
+      0.000165701,
+      0.000121201,
+      9.30006E-05,
+      6.40004E-05,
+      4.22003E-05,
+      2.85002E-05,
+      1.96001E-05//,
+     //  1.59001E-05,
+      //       1.01001E-05,
+      //       8.50006E-06,
+      //       6.60004E-06,
+      //       2.70002E-06
+    };
+    
+    Double_t Summer2012_S7[50] = {
+      2.344E-05,2.344E-05,2.344E-05,2.344E-05,
+      4.687E-04,4.687E-04,7.032E-04,9.414E-04,
+      1.234E-03,1.603E-03,2.464E-03,3.250E-03,
+      5.021E-03,6.644E-03,8.502E-03,1.121E-02,
+      1.518E-02,2.033E-02,2.608E-02,3.171E-02,
+      3.667E-02,4.060E-02,4.338E-02,4.520E-02,
+      4.641E-02,4.735E-02,4.816E-02,4.881E-02,
+      4.917E-02,4.909E-02,4.842E-02,4.707E-02,
+      4.501E-02,4.228E-02,3.896E-02,3.521E-02,
+      3.118E-02,2.702E-02,2.287E-02,1.885E-02,
+      1.508E-02,1.166E-02,8.673E-03,6.190E-03,
+      4.222E-03,2.746E-03,1.698E-03,9.971E-04,
+      5.549E-04,2.924E-04
+      // ,1.457E-04,6.864E-05,
+      //       3.054E-05,1.282E-05,5.081E-06,1.898E-06,
+      //       6.688E-07,2.221E-07,6.947E-08,2.047E-08
+    }; 
+
+
+
+    //    Double_t Summer2012_S10[60] = {
+    Double_t Summer2012_S10[50] = {
+      2.560E-06,      5.239E-06,      1.420E-05,      5.005E-05,      1.001E-04,
+      2.705E-04,      1.999E-03,      6.097E-03,      1.046E-02,      1.383E-02,
+      1.685E-02,      2.055E-02,      2.572E-02,      3.262E-02,      4.121E-02,
+      4.977E-02,      5.539E-02,      5.725E-02,      5.607E-02,      5.312E-02,
+      5.008E-02,      4.763E-02,      4.558E-02,      4.363E-02,      4.159E-02,
+      3.933E-02,      3.681E-02,      3.406E-02,      3.116E-02,      2.818E-02,     
+      2.519E-02,      2.226E-02,      1.946E-02,      1.682E-02,      1.437E-02,
+      1.215E-02,      1.016E-02,      8.400E-03,      6.873E-03,      5.564E-03,
+      4.457E-03,      3.533E-03,      2.772E-03,      2.154E-03,      1.656E-03,
+      1.261E-03,      9.513E-04,      7.107E-04,      5.259E-04,      3.856E-04};
+
+    //  2.801E-04,      2.017E-04,      1.439E-04,      1.017E-04,      7.126E-05,
+    //       4.948E-05,      3.405E-05,      2.322E-05,      1.570E-05,      5.005E-06};
+
+  
+    TFile * myfile = new TFile("MCdist.root", "RECREATE");
+    TH1D * pumc =  new TH1D("pileup", "pileup", 50, 0, 50 );
+    for(int ibin = 1; ibin < 51; ++ibin) {
+      //  pumc->SetBinContent( ibin, Fall2011_InTime[ibin-1] );
+      //if(Analyze2012_) pumc->SetBinContent( ibin, Summer2012_S10[ibin-1] );
+      if(Analyze2012_) pumc->SetBinContent( ibin, Summer2012_S7[ibin-1] );
+      else  pumc->SetBinContent( ibin, Fall2011[ibin-1] );
+    }
+    
+    pumc->SetDirectory( myfile );
+    pumc->Write();
+    myfile->Close();
+    delete myfile;
+    
+    LumiWeights_ = edm::LumiReWeighting("MCdist.root", datafilepath,
+					"pileup", "pileup");
+  }
+}
+
+void HmumuNtuple_pat::analyze(const edm::Event& event, const edm::EventSetup& context)
+{
+  using namespace std;
+  using namespace edm;
+  using namespace reco;
+  using namespace pat;
+
+  //retrieve the beamspot info
+  edm::Handle<reco::BeamSpot> recoBeamSpotHandle;
+  event.getByLabel(beamSpotTag_ ,recoBeamSpotHandle);
+   
+  edm::Handle<edm::TriggerResults>  hltresults;
+  event.getByLabel(hltresults_, hltresults);
+  
+  edm::Handle<reco::VertexCollection> privtxs;
+  event.getByLabel(PrimaryVertexTag_, privtxs);
+
+  edm::Handle<pat::MuonCollection> MuList;
+  event.getByLabel(staMuLabel_,MuList);
+
+  Handle<pat::METCollection> pfMET;
+  event.getByLabel(PFMETCollection_, pfMET);
+ 
+  Handle<reco::GenParticleCollection> GenP;
+  if(MCtruth_) event.getByLabel(GenParticleCollection_, GenP);
+  
+  Handle<pat::JetCollection>  pfJets;
+  event.getByLabel(PFJetCollection_,pfJets);
+
+  edm::Handle<edm::View<pat::Jet> > jets;
+  //  event.getByLabel("selectedPatJetsPFlow",jets);
+  event.getByLabel(PFJetCollection_,jets);
+
+  edm::ESHandle<JetCorrectorParametersCollection> JetCorParColl;
+  context.get<JetCorrectionsRecord>().get("AK5PF",JetCorParColl); 
+
+  Handle<edm::ValueMap<float> > puJetIdMVA;
+  event.getByLabel("puJetMva","fullDiscriminant",puJetIdMVA);
+
+  Handle<ValueMap<int> > puJetIdFlag;
+  event.getByLabel("puJetMva","fullId",puJetIdFlag);
+  
+  Handle<pat::ElectronCollection>  pfEle;
+  event.getByLabel(PFEleCollection_,pfEle);
+  
+  Handle<std::vector<PileupSummaryInfo> > PupInfo;
+  if(MCtruth_)  event.getByLabel(PileupSrc_, PupInfo);
+  
+  Handle<double> rho;
+  event.getByLabel(edm::InputTag("kt6PFJets", "rho"), rho);
+  
+  Handle<double> sigma;
+  event.getByLabel(edm::InputTag("kt6PFJets", "sigma"), sigma);
+
+  Handle<GenEventInfoProduct> genEventInfo;
+  event.getByLabel("generator", genEventInfo); //PdfInfoTag
+   
+  //clear the containers
+  clear_Arrays();
+  
+  /////// sisteamtico delle pdf
+  if (genEventInfo->hasPDF()) {
+    const gen::PdfInfo* pdfstuff = genEventInfo->pdf();
+    
+    double Q  = pdfstuff->scalePDF;
+    
+    int id1   = pdfstuff->id.first;
+    int id2   = pdfstuff->id.second;
+    double x1 = pdfstuff->x.first;
+    double x2 = pdfstuff->x.second;
+    
+    ///////////////////////////////////
+    unsigned int gensize = GenP->size();
+    double mboson = 0.;
+    for(unsigned int i = 0; i<gensize; ++i) {
+      const reco::GenParticle& part = (*GenP)[i];
+      int status = part.status();
+      if (status!=3) continue;
+      int id = part.pdgId();
+      if (id!=25 && abs(id)!=35 && abs(id)!=36) continue;
+      mboson = part.mass();
+      break;
+    }
+    Q = sqrt(mboson*mboson+Q*Q);
+    LHAPDF::usePDFMember(3,0);   //3 è la PDF di riferimento mentre 1 e 2 sono i due partoni....
+    pdf1 = LHAPDF::xfx(1, x1, Q, id1)/x1;
+    pdf2 = LHAPDF::xfx(1, x2, Q, id2)/x2;
+    
+    //compute the event weights w.r.t the PDF n.3
+    LHAPDF::usePDFMember(1,0);
+    double newpdf1 = LHAPDF::xfx(1, x1, Q, id1)/x1;
+    double newpdf2 = LHAPDF::xfx(1, x2, Q, id2)/x2;
+    wpdfMSTW = (newpdf1/pdf1*newpdf2/pdf2);
+    
+    LHAPDF::usePDFMember(2,0);
+    double Newpdf1 = LHAPDF::xfx(2, x1, Q, id1)/x1;
+    double Newpdf2 = LHAPDF::xfx(2, x2, Q, id2)/x2;
+    wpdfNNPDF = (Newpdf1/pdf1*Newpdf2/pdf2);
+  }
+  
+  
+  eventi_iniziali++;
+  eventi_iniziali_W_NNPDF += wpdfNNPDF;
+  eventi_iniziali_W_MSTW += wpdfMSTW;
+  
+  
+ 
+  nMU_15 = 0;
+  nMU_20 = 0;
+  for (pat::MuonCollection::const_iterator nmuon = MuList->begin(); nmuon != MuList->end(); ++nmuon){
+    if(nmuon->isGlobalMuon()==1 && nmuon->isTrackerMuon()==1 && fabs(nmuon->eta())<2.4){
+      if(nmuon->pt()>15.) ++nMU_15;
+      if(nmuon->pt()>20.) ++nMU_20;
+    }
+  }
+  
+  if(nMU_15>1 && nMU_20>0){ // take the event
+  
+    MyWeight = 1.;
+    
+    if(MCtruth_ ){
+      std::vector<PileupSummaryInfo>::const_iterator PVI;
+      
+      float Tnpv = -1;
+      for(PVI = PupInfo->begin(); PVI != PupInfo->end(); ++PVI) {
+	int BX = PVI->getBunchCrossing();
+	if(BX == 0) { 
+	  // Tnpv = PVI->getPU_NumInteractions();
+	  Tnpv = PVI->getTrueNumInteractions();
+	  continue;
+	}
+      }
+      
+      MyWeight = LumiWeights_.weight( Tnpv );
+            
+      if(debug_)std::cout << "MyWeight  "<<MyWeight<< std::endl;
+      
+    }//end MCtruth
+    
+    // if(debug_) std::cout << "Event number: " << event.eventAuxiliary().event()<<std::endl;
+    
+    //Fill the event info block
+    runnumber = event.run();
+    lumiblock = event.getLuminosityBlock().luminosityBlock();
+    eventNumber = event.eventAuxiliary().event();
+    timestamp = event.eventAuxiliary().time().value();
+    bunchXing = event.eventAuxiliary().bunchCrossing();
+    orbitNum = event.eventAuxiliary().orbitNumber();
+  
+    if(youwantNTuples_){
+      //BEAM SPOT
+      fill_beamspot_variables(recoBeamSpotHandle);
+      
+      //HLT
+      fill_hlt_variables(event,hltresults);
+      
+      //PRIMARY VERTEX 
+      fill_vtxs_variables(privtxs);
+      
+      //MUONS
+      fill_muons_variables(MuList,privtxs);
+      
+      //PFELE
+      fill_PFEle_variables(pfEle);
+      
+      if(MCtruth_) fill_GenParticle_variables(GenP);
+      
+      //PFJET
+      // fill_PFJet_variables(pfJets, puJetIdMVA);
+
+      fill_PFJet_variables(jets, puJetIdMVA, puJetIdFlag);
+      
+      //PFMET
+      fill_PFMET_variables(pfMET);
+      
+      fill_rho_variables(rho,sigma);
+    }
+    
+    if(youwantAnalysis_){
+    
+      //   double MGen = 0;
+      //       reco::GenParticle MU1;
+      //       reco::GenParticle MU2;
+      //       for(reco::GenParticleCollection::const_iterator genp = GenP->begin(); genp != GenP->end(); genp++){ 
+      // 	if(genp->pdgId()==13 && genp->status()==1){
+      // 	  MU1 = (*genp);
+      // 	  std::cout << "MU1 pt = " << MU1.pt() << std::endl;
+      // 	}
+      // 	else  std::cout << "No MU 1 " << std::endl;
+      // 	if(genp->pdgId()==-13 && genp->status()==1){
+      // 	  MU2 = (*genp);
+      // 	  std::cout << "MU2 pt = " << MU2.pt() << std::endl;
+      // 	}
+      // 	else  std::cout << "No MU 2 " << std::endl;	
+      //       }
+      //       if (MU1.pt()>0. && MU2.pt()>0.){
+      // 	MGen =  sqrt((MU1.energy()+MU2.energy())*(MU1.energy()+MU2.energy())-
+      // 		     ((MU1.px()+MU2.px())*(MU1.px()+MU2.px())+
+      // 		      (MU1.py()+MU2.py())*(MU1.py()+MU2.py())+
+      // 		      (MU1.pz()+MU2.pz())*(MU1.pz()+MU2.pz())
+      // 		      ));
+      
+      // 	hMass_gen->Fill(MGen);
+      //       }
+      // if(event.run() == 191057)  std::cout << "Run:" <<event.run() <<" Event:" <<eventNumber << std::endl;
+    
+      //std::cout << "eventnumber all'inizio = " << eventNumber << std::endl;
+      //do the analysis
+      bool SingleMu24 = false; 
+      bool DoubleMu24 = false;      
+      //TRIGGER
+      const edm::TriggerNames TrigNames_ = event.triggerNames(*hltresults);
+      const int ntrigs = hltresults->size();
+      
+      for (int itr=0; itr<ntrigs; itr++){
+	TString trigName=TrigNames_.triggerName(itr);
+	if (hltresults->accept(itr)) {
+	  // hlt_path.push_back(trigName);
+	  //std::cout << "trigger name " << trigName << std::endl;
+	  if(trigName =="HLT_IsoMu24_eta2p1_v7" || trigName =="HLT_IsoMu24_eta2p1_v11" || trigName =="HLT_IsoMu24_eta2p1_v12"
+	     || trigName =="HLT_IsoMu24_eta2p1_v13" || trigName =="HLT_IsoMu24_eta2p1_v8" || trigName =="HLT_IsoMu24_eta2p1_v10")  SingleMu24=true;  
+	  if(trigName =="HLT_Mu17_Mu8_v16" || trigName =="HLT_Mu17_Mu8_v17")  DoubleMu24=true;  
+	}
+      }
+
+      int Nmu1 = 0;
+      int Nmu2 = 0;
+      bool GoodMu = false;
+      int nGoodMu = 0;
+      int nJet = 0;
+      int nbJet = 0;
+      int nJet_MEtcut = 0;
+      int nbJet_Jetcut = 0;
+      double mHiggs = 0.;
+      double mHiggsMuCuts = 0.;
+      double JEC_Unc = 0.;
+      pat::Muon mu1;  
+      pat::Muon mu2;   
+      reco::Vertex PV;
+
+      int nJet_JEScutUP = 0;
+      int nJet_JEScutDOWN = 0;
+      int nJet_JEScutBASE = 0;      
+     
+      if(SingleMu24){
+	 // 	std::cout << std::endl;
+// 	 	std::cout << std::endl;
+// 	 	std::cout << "**************************************************************************************" << std::endl;
+// 	 	std::cout << "Run " << event.run() << "  event number " << eventNumber << "  pass trigger selection." << " weight " << MyWeight <<std::endl;
+	eventi_Trigger_W += MyWeight;
+	eventi_Trigger++;
+	int nVertex = 0;
+	reco::VertexCollection vertexCollection = *(privtxs.product());
+	for(reco::VertexCollection::const_iterator p = vertexCollection.begin(); p!=vertexCollection.end(); ++p){
+	  if(nVertex==0) PV = (*p);
+	  nVertex++;
+	}
+	hPrimaryVertex->Fill(nVertex,MyWeight);
+	
+	int muoni = 0;
+	int muoniiso = 0;
+	
+	for (pat::MuonCollection::const_iterator mu = MuList->begin(); mu != MuList->end(); ++mu){
+	  if(mu->globalTrack().isAvailable() &&  mu->innerTrack().isAvailable()){
+	    const reco::TrackRef glbmutrackref = mu->globalTrack();
+	    const reco::TrackRef inmutrackref  = mu->innerTrack();
+	    //quality cuts no pt
+	    if(mu->isGlobalMuon() && mu->isTrackerMuon() && 
+	       mu->numberOfMatchedStations() > 1 && //twiki
+	       mu->dB() < 0.2 && //twiki
+	       fabs(inmutrackref->dz(PV.position()))  < 0.5 && //twiki
+	       inmutrackref->hitPattern().numberOfValidPixelHits() > 0 && //twiki
+	       inmutrackref->hitPattern().trackerLayersWithMeasurement() > 5 && //twiki
+	       glbmutrackref->normalizedChi2() < 10. && //twiki
+	       glbmutrackref->hitPattern().numberOfValidPixelHits() > 0 && 
+	       glbmutrackref->hitPattern().numberOfValidMuonHits() > 0 && //twiki
+	       fabs(mu->eta())<2.1){
+	      muoni++; 
+	      
+	      double deltaB = mu->pfIsolationR04().sumChargedHadronPt/mu->pt();
+	      double deltaB_corrected = mu->pfIsolationR04().sumNeutralHadronEt + mu->pfIsolationR04().sumPhotonEt - 0.5*mu->pfIsolationR04().sumPUPt;
+	      
+	      if(deltaB_corrected <0.) deltaB_corrected = deltaB;
+	      else if(deltaB_corrected >=0.) deltaB_corrected = deltaB_corrected/mu->pt() + deltaB;   
+	    
+	      //isolation cut 
+	      if(deltaB < 0.12){   // take in order of pt
+		muoniiso++;
+		if (mu->pt()>25.&& fabs(mu->eta())<2.1){
+		  if(Nmu1==0)  mu1 = (*mu);
+		  Nmu1++;
+		} 
+		if( mu1.pt()> 25. && Nmu2==1 && mu->pt()>=25. && mu1.charge() != mu->charge())  mu2 = (*mu);
+		Nmu2++;
+	      }//end isolation cut
+	    }//end quality cuts
+	  }//end track ref
+	}//end muon loop
+	if(muoni>1){
+	  eventi_Quality_W += MyWeight;
+	  eventi_Quality++;
+	}
+	if(muoniiso>1) {
+	  eventi_Iso_W += MyWeight;
+	  eventi_Iso++;
+	}
+      }//end singlemu24
+           
+      if(mu1.pt()>0. && mu2.pt()>0.){
+	eventi_MuonSel_W += MyWeight;
+	eventi_MuonSel++; 
+	nGoodMu++;
+	//check to same PV in a 0.2 cone??
+	if (fabs(mu1.vz() - mu2.vz())< 0.2 &&
+	    fabs(sqrt((mu1.vx()+mu1.vy())*(mu1.vx()+mu1.vy()))
+		 - sqrt((mu2.vx()+mu2.vy())*(mu2.vx()+mu2.vy()))) < 0.2) GoodMu=true;
+
+	hmu_1->Fill(mu1.pt(),MyWeight);
+	hmu_2->Fill(mu2.pt(),MyWeight);
+	tmu_1.push_back(mu1.pt());
+	tmu_2.push_back(mu2.pt());
+	
+	mHiggsMuCuts = sqrt((mu1.energy()+mu2.energy())*(mu1.energy()+mu2.energy())-
+			    ((mu1.px()+mu2.px())*(mu1.px()+mu2.px())+
+			     (mu1.py()+mu2.py())*(mu1.py()+mu2.py())+
+			     (mu1.pz()+mu2.pz())*(mu1.pz()+mu2.pz())
+			     ));
+      
+	if(mHiggsMuCuts>110. && mHiggsMuCuts<160.){
+	  hMass_2mucut->Fill(mHiggsMuCuts,MyWeight);	
+	  tMass_2mucut.push_back(mHiggsMuCuts);
+	} 
+
+	if(mHiggsMuCuts>60.){
+	  eventi_Minv_W += MyWeight;
+	  eventi_Minv++;
+
+	  eventi_Minv_wpdfMSTW += wpdfMSTW;
+	  eventi_Minv_wpdfNNPDF += wpdfNNPDF;
+	 	  
+	  //MISSING ET
+	  for(pat::METCollection::const_iterator met = pfMET->begin(); met != pfMET->end(); met++){
+	    hMEt_2mucut->Fill(met->pt());
+	    tMEt_2mucut.push_back(met->pt());
+	    //  std::cout << "MEt = " << met->pt()<< "  MEt phi = "<< met->phi()<< std::endl;
+	    if(met->pt()<35.){
+	      eventi_MEt_W += MyWeight;
+	      eventi_MEt++;
+	      hMEt_MEtcut->Fill(met->pt(),MyWeight);
+	      tMEt_MEtcut.push_back(met->pt());
+	      hMass_MEtcut->Fill(mHiggsMuCuts,MyWeight);	
+	      tMass_MEtcut.push_back(mHiggsMuCuts);
+	    
+	      
+	      // JET
+	      nJet = 0;
+	      nbJet = 0;
+	      nJet_MEtcut = 0;
+	      nbJet_Jetcut = 0;
+
+	      nJet_JEScutUP = 0; nJet_JEScutDOWN = 0; nJet_JEScutBASE = 0;
+
+	      for(pat::JetCollection::const_iterator jet=  pfJets->begin(); jet != pfJets->end(); ++jet){
+		nJet++;	      
+		JetCorrectorParameters const & JetCorPar = (*JetCorParColl)["Uncertainty"];
+		JetCorrectionUncertainty *jecUnc = new JetCorrectionUncertainty(JetCorPar);
+		
+		jecUnc->setJetEta(jet->eta());
+		jecUnc->setJetPt(jet->pt()); // here you must use the CORRECTED jet pt
+		double unc = jecUnc->getUncertainty(true);
+		//	      std::cout << "jecUnc = " << unc << std::endl;
+		
+		hJet_pt_2mucut->Fill(jet->pt(),MyWeight);
+		hJet_eta_2mucut->Fill(jet->eta(),MyWeight);
+		hJet_bDisc_2mucut->Fill(jet->bDiscriminator("combinedSecondaryVertexBJetTags"),MyWeight);
+		
+		tJet_pt_2mucut.push_back(jet->pt());
+		tJet_eta_2mucut.push_back(jet->eta());
+		tJet_bDisc_2mucut.push_back(jet->bDiscriminator("combinedSecondaryVertexBJetTags"));
+		
+		//  if(met->pt()<35.){
+		nJet_MEtcut++;
+		hJet_pt_MEtcut->Fill(jet->pt(),MyWeight);
+		hJet_eta_MEtcut->Fill(jet->eta(),MyWeight);
+		hJet_bDisc_MEtcut->Fill(jet->bDiscriminator("combinedSecondaryVertexBJetTags"),MyWeight);
+		
+		tJet_pt_MEtcut.push_back(jet->pt());
+		tJet_eta_MEtcut.push_back(jet->eta());
+		tJet_bDisc_MEtcut.push_back(jet->bDiscriminator("combinedSecondaryVertexBJetTags"));
+	  
+		//if( jet->pt() > 20. && fabs(jet->eta())<=2.4){
+		if( (jet->pt()-(jet->pt()*unc))>20. && fabs(jet->eta())<=2.4){
+		  //if( jet->pt()>20. && fabs(jet->eta())<=2.4){
+		  
+		  if(jet->bDiscriminator("combinedSecondaryVertexBJetTags")>0.679){
+		   
+		    hJet_pt_bcut->Fill(jet->pt(),MyWeight);
+		    hJet_eta_bcut->Fill(jet->eta(),MyWeight);
+		    hJet_bDisc_bcut->Fill(jet->bDiscriminator("combinedSecondaryVertexBJetTags"),MyWeight);
+		    
+		    tJet_pt_bcut.push_back(jet->pt());	
+		    tJet_eta_bcut.push_back(jet->eta());
+		    tJet_bDisc_bcut.push_back(jet->bDiscriminator("combinedSecondaryVertexBJetTags"));
+		    
+		    nbJet_Jetcut++;    // jet pt cut
+		  }
+		  
+
+		  if(nbJet==0){
+		    hJet_Leadingpt_bcut->Fill(jet->pt(),MyWeight);
+		    hJet_Leadingeta_bcut->Fill(jet->eta(),MyWeight);
+		    hJet_LeadingbDisc_bcut->Fill(jet->bDiscriminator("combinedSecondaryVertexBJetTags"),MyWeight);	
+		    
+		    tJet_Leadingpt_bcut.push_back(jet->pt());
+		    tJet_Leadingeta_bcut.push_back(jet->eta());
+		    tJet_LeadingbDisc_bcut.push_back(jet->bDiscriminator("combinedSecondaryVertexBJetTags"));
+		  }
+		  
+		  if(nbJet==1){
+		    hJet_Secondpt_bcut->Fill(jet->pt(),MyWeight);
+		    hJet_Secondeta_bcut->Fill(jet->eta(),MyWeight);
+		    hJet_SecondbDisc_bcut->Fill(jet->bDiscriminator("combinedSecondaryVertexBJetTags"),MyWeight);	
+		    
+		    tJet_Secondpt_bcut.push_back(jet->pt());
+		    tJet_Secondeta_bcut.push_back(jet->eta());
+		    tJet_SecondbDisc_bcut.push_back(jet->bDiscriminator("combinedSecondaryVertexBJetTags"));
+		  }
+		
+		  nbJet++; 
+				    
+		}//end b cut
+		
+		//// JES uncertainty
+		if( (jet->pt()+(jet->pt()*unc))>20. && fabs(jet->eta())<=2.4)   nJet_JEScutUP++;    // jet pt cut
+		
+		if( (jet->pt()-(jet->pt()*unc))>20. && fabs(jet->eta())<=2.4)   nJet_JEScutDOWN++;    // jet pt cut
+		
+		if( jet->pt() > 20. && fabs(jet->eta())<=2.4)                   nJet_JEScutBASE++;    // jet pt cut
+		
+		
+	      }//end loop on jet
+	      
+	      
+	      if( nJet_JEScutUP   > 0 ) eventi_JEScutUP++;
+	      if( nJet_JEScutDOWN > 0 ) eventi_JEScutDOWN++;
+	      if( nJet_JEScutBASE > 0 ) eventi_JEScutBASE++;
+	      
+	      if(nbJet_Jetcut>0 && nbJet_Jetcut<3){
+		hMass_final_1jet->Fill(mHiggsMuCuts,MyWeight);
+		hJEC_Unc->Fill(JEC_Unc);
+		tMass_final_1jet.push_back(mHiggsMuCuts);
+		eventi_finali_W += MyWeight;
+		eventi_finali++;
+		eventi_finali_W_NNPDF = eventi_finali*wpdfNNPDF;
+		eventi_finali_W_MSTW = eventi_finali*wpdfMSTW;
+
+	      }
+	      else{
+		eventi_finali_cat2++;
+		eventi_finali_cat2_W_NNPDF = eventi_finali_cat2*wpdfNNPDF;
+		eventi_finali_cat2_W_MSTW  = eventi_finali_cat2*wpdfMSTW;
+	      }
+	      //  if(nbJet_Jetcut==1){       //jet veto 
+	      // 	      hMass_final_jetVeto->Fill(mHiggsMuCuts,MyWeight);
+	      // 	      tMass_final_jetVeto.push_back(mHiggsMuCuts);
+	      // 	      eventi_finali_jetVeto_W += MyWeight;
+	      // 	      eventi_finali_jetVeto++;
+	      // 	    }
+	      
+	      hNJet->Fill(nJet,MyWeight);
+	      hNJet_MEtcut->Fill(nJet_MEtcut,MyWeight); 
+	      hNbJet->Fill(nbJet,MyWeight);
+	      hNbJet_Jetcut->Fill(nbJet_Jetcut,MyWeight);	
+	    }//end met cut
+	  }//end loop on met
+	  
+	}//end if minv>100
+	//else if(event.run() == 191057) std::cout << "The event does not pass the cut on the inv. mass > 60 "<< std::endl; 
+      }//end if 2goodMu
+      //else if(event.run() == 191057) std::cout << "The event does not pass the muon selection "<< std::endl; 
+      
+     //  std::cout << "Total number of di-muon events =  "  << nGoodMu << "  check the vertex = " << GoodMu << std::endl;
+//       std::cout << "that have "  << nJet << " Jet, " <<  nJet_MEtcut << " after Met < 35 GeV, " << nbJet << " are btagged > 0.679, and "<<nbJet_Jetcut << " have pt > 20 GeV." << std::endl;
+//       std::cout << " Higgs mass " << mHiggs << std::endl;
+//       std::cout << std::endl;
+      
+    }//end youwantAnalysis
+    
+    tree_->Fill();
+    
+  } //close if() to take event
+  
+  else  if(nMU_20<1 && nMU_15<2){
+    if(debug_) std::cout<<"bad event there is "<< nMU_20 << "  muon with pt > 20"<< std::endl;
+  }
+  
+  return;
+}
+
+
+void HmumuNtuple_pat::fill_beamspot_variables(edm::Handle<reco::BeamSpot> recoBeamSpotHandle)
+{
+  beamspot = *recoBeamSpotHandle; 
+
+  BS_x = beamspot.x0();
+  BS_y = beamspot.y0(); 
+  BS_z = beamspot.z0();
+  BS_xerr = beamspot.x0Error();
+  BS_yerr = beamspot.y0Error();
+  BS_zerr = beamspot.z0Error();
+  BS_Wx = beamspot.BeamWidthX(); 
+  BS_Wy = beamspot.BeamWidthY();
+  BS_Wxerr = beamspot.BeamWidthXError();
+  BS_Wyerr = beamspot.BeamWidthYError();
+  BS_dxdz    = beamspot.dxdz();
+  BS_dxdzerr = beamspot.dxdzError();
+  BS_dydz    = beamspot.dydz();
+  BS_dydzerr = beamspot.dydzError();
+
+  iBeam++;
+
+  return;
+}
+
+void HmumuNtuple_pat::fill_GenParticle_variables(edm::Handle<reco::GenParticleCollection> GenP)
+{
+  iGenP = 0;  
+
+  for(reco::GenParticleCollection::const_iterator genp = GenP->begin(); genp != GenP->end(); genp++){ 
+
+    Genp_particleId.push_back(genp->pdgId());  
+    Genp_status.push_back(genp->status());
+    Genp_pt.push_back(genp->pt());
+    Genp_p.push_back(genp->p());
+    Genp_et.push_back(genp->et());
+    Genp_e.push_back(genp->energy());
+    Genp_mt.push_back(genp->mt());
+    Genp_m.push_back(genp->mass());
+    Genp_eta.push_back(genp->eta());
+    Genp_phi.push_back(genp->phi());
+    Genp_vx.push_back(genp->vx());
+    Genp_vy.push_back(genp->vy());
+    Genp_vz.push_back(genp->vz());
+     
+    Genp_nMmothers.push_back(genp->numberOfMothers());
+    Genp_nDaughters.push_back(genp->numberOfDaughters());
+ 
+    if(debug_) std::cout<< "GenParticle " << iGenP << "  : ID = " << genp->pdgId()<< "  status = " << genp->status()<< "  pt = "<<genp->pt()<< "  massa = "<<genp->mass()<< "  massa trasv = "<<genp->mt() << "   figli = "<< genp->numberOfDaughters()<< "  genitori = "<< genp->numberOfMothers()<< std::endl;
+    
+    if ( genp->numberOfMothers() > 0){  
+      for (unsigned int i = 0; i < genp->numberOfMothers(); i++){      
+	Genp_particleId_mother.push_back(genp->motherRef()->pdgId());
+	Genp_status_mother.push_back(genp->motherRef()->status());
+	Genp_pt_mother.push_back(genp->motherRef()->pt());
+	Genp_eta_mother.push_back(genp->motherRef()->eta());
+	Genp_phi_mother.push_back(genp->motherRef()->phi());
+	
+	if(debug_) std::cout << " mother ref " <<  genp->motherRef()->pdgId() << std::endl;
+      }
+    }
+    else if( genp->numberOfMothers()==0){
+      Genp_particleId_mother.push_back(-999999.);
+      Genp_status_mother.push_back(-999999.);
+      Genp_pt_mother.push_back(-999999.);
+      Genp_eta_mother.push_back(-999999.);
+      Genp_phi_mother.push_back(-999999.);
+      
+      if(debug_) std::cout << " NO mother " << std::endl;
+    }
+    
+    iGenP++;  
+  }
+  return;
+}
+
+ 
+void HmumuNtuple_pat::fill_hlt_variables(const edm::Event &e, edm::Handle<edm::TriggerResults> hltresults){
+  ihlt = 0; 
+  const edm::TriggerNames TrigNames_ = e.triggerNames(*hltresults);
+  const int ntrigs = hltresults->size();
+  
+  for (int itr=0; itr<ntrigs; itr++){
+    TString trigName=TrigNames_.triggerName(itr);
+    if (hltresults->accept(itr)) {
+      hlt_path.push_back(trigName);
+      ihlt++;
+    }
+  }
+  
+  return;
+}
+
+void HmumuNtuple_pat::fill_vtxs_variables(edm::Handle<reco::VertexCollection> privtxs)
+{ 
+  ivtx = 0;
+  
+  reco::VertexCollection vertexCollection = *(privtxs.product());
+  for(reco::VertexCollection::const_iterator p = vertexCollection.begin(); p!=vertexCollection.end(); ++p){
+    if(debug_ && ivtx==0) std::cout << "primary vertex: x = " << p->x() << " y = " << p->y() << " z = " << p->z() << std::endl;
+    PV_x.push_back(p->x());
+    PV_y.push_back(p->y()); 
+    PV_z.push_back(p->z());
+    PV_xerr.push_back(p->xError());
+    PV_yerr.push_back(p->yError());
+    PV_zerr.push_back(p->zError());
+    
+    PV_validity.push_back(p->isValid());
+    PV_fake.push_back(p->isFake());
+    
+    if (! p->isFake()){
+      PV_normchi2.push_back(p->normalizedChi2());
+    }	
+    else
+      PV_normchi2.push_back(999.);
+    
+    PV_chi2.push_back(p->chi2());
+    PV_ndof.push_back(p->ndof());
+    PV_ntracks.push_back(p->tracksSize());
+    
+    double sumpt = 0;
+    for (reco::Vertex::trackRef_iterator iTrack = p->tracks_begin(); iTrack!=p->tracks_end(); ++iTrack){
+      sumpt += (*iTrack)->pt();
+      if(debug_) std::cout << "sum pt in vertex " << ivtx << "  = " << sumpt  <<std::endl;
+    }
+    
+    PV_SumPtTracks.push_back(sumpt);
+    
+    ivtx++; 
+  }   
+  return;
+}
+
+void HmumuNtuple_pat::fill_muons_variables(edm::Handle<pat::MuonCollection> MuList, edm::Handle<reco::VertexCollection> privtxs)
+{
+  imuons = 0;
+  GlobalMuons      = 0;
+  TrackerMuons     = 0;
+  StandAloneMuons  = 0;
+    
+  for (pat::MuonCollection::const_iterator nmuon = MuList->begin(); nmuon != MuList->end(); ++nmuon){
+    
+    //    const pat::TriggerObjectStandAloneCollection mu1HLTMatches =  nmuon->triggerObjectMatchesByPath("HLT_IsoMu24_eta2p1_v*");
+    const pat::TriggerObjectStandAloneCollection mu1HLTMatches =  nmuon->triggerObjectMatchesByPath(muonMatch_);
+    bool pass = false;
+    if(mu1HLTMatches.size() > 0) pass = true;
+    if(debug_) std::cout << "Did it triggered? " << pass << std::endl; 
+
+    Mu_hasTriggered.push_back(pass);    
+
+    Mu_isMuGlobal.push_back(nmuon->isGlobalMuon());
+    Mu_isMuTracker.push_back(nmuon->isTrackerMuon());
+    Mu_isMuStandAlone.push_back(nmuon->isStandAloneMuon());
+       
+    if(nmuon->isStandAloneMuon()) ++StandAloneMuons;
+    if(nmuon->isGlobalMuon()) ++GlobalMuons;
+    if(nmuon->isTrackerMuon()) ++TrackerMuons;
+  
+    Mu_numberOfChambers.push_back(nmuon->numberOfChambers());
+    Mu_numberOfMatches.push_back(nmuon->numberOfMatches());
+    Mu_numberOfMatchedStation.push_back(nmuon->numberOfMatchedStations());
+    Mu_dB.push_back(nmuon->dB());
+        
+    Mu_pt_mu.push_back(nmuon->pt());
+    Mu_px_mu.push_back(nmuon->px());
+    Mu_py_mu.push_back(nmuon->py());
+    Mu_pz_mu.push_back(nmuon->pz());
+    Mu_en_mu.push_back(nmuon->energy());
+    Mu_phi_mu.push_back(nmuon->phi());
+    Mu_eta_mu.push_back(nmuon->eta());
+    Mu_charge_mu.push_back(nmuon->charge());
+
+     //isolation 03 and 05 and 04
+    Mu_sumPtIsoR03.push_back(nmuon->isolationR03().sumPt);
+    Mu_ntkIsoR03.push_back(nmuon->isolationR03().nTracks);
+    Mu_emIsoR03.push_back(nmuon->isolationR03().emEt);
+    Mu_hadIsoR03.push_back(nmuon->isolationR03().hadEt);
+    Mu_hoEtIsoR03.push_back(nmuon->isolationR03().hoEt);
+    Mu_nJetsIsoR03.push_back(nmuon->isolationR03().nJets);
+
+    Mu_sumPtIsoR05.push_back(nmuon->isolationR05().sumPt);
+    Mu_ntkIsoR05.push_back(nmuon->isolationR05().nTracks);
+    Mu_emIsoR05.push_back(nmuon->isolationR05().emEt);
+    Mu_hadIsoR05.push_back(nmuon->isolationR05().hadEt);
+    Mu_hoEtIsoR05.push_back(nmuon->isolationR05().hoEt);
+    Mu_nJetsIsoR05.push_back(nmuon->isolationR05().nJets);
+    
+    Mu_sumCHPtPFIsoR04.push_back(nmuon->pfIsolationR04().sumChargedHadronPt);
+    Mu_sumCPPtPFIsoR04.push_back(nmuon->pfIsolationR04().sumChargedParticlePt);
+    Mu_sumNHPtPFIsoR04.push_back(nmuon->pfIsolationR04().sumNeutralHadronEt);
+    Mu_sumPhoEtPFIsoR04.push_back(nmuon->pfIsolationR04().sumPhotonEt);
+    Mu_sumPUPtPFIsoR04.push_back(nmuon->pfIsolationR04().sumPUPt);
+
+    Mu_sumCHPtPFIsoR03.push_back(nmuon->pfIsolationR03().sumChargedHadronPt);
+    Mu_sumCPPtPFIsoR03.push_back(nmuon->pfIsolationR03().sumChargedParticlePt);
+    Mu_sumNHPtPFIsoR03.push_back(nmuon->pfIsolationR03().sumNeutralHadronEt);
+    Mu_sumPhoEtPFIsoR03.push_back(nmuon->pfIsolationR03().sumPhotonEt);
+    Mu_sumPUPtPFIsoR03.push_back(nmuon->pfIsolationR03().sumPUPt);
+	    
+    Mu_calEnergyEm.push_back(nmuon->calEnergy().em); 
+    Mu_calEnergyHad.push_back(nmuon->calEnergy().had);
+    Mu_calEnergyHo.push_back(nmuon->calEnergy().ho);
+    Mu_calEnergyEmS9.push_back(nmuon->calEnergy().emS9);
+    Mu_calEnergyHadS9.push_back(nmuon->calEnergy().hadS9);
+    Mu_calEnergyHoS9.push_back(nmuon->calEnergy().hoS9);
+      
+    //point closest to beamspot
+    Mu_vertex_vx.push_back(nmuon->vx());
+    Mu_vertex_vy.push_back(nmuon->vy());
+    Mu_vertex_vz.push_back(nmuon->vz());
+ 
+    if(debug_) std::cout << "mu vertex x = " << nmuon->vx() << "  y = " << nmuon->vy()  <<"  z = "<<nmuon->vz()  <<std::endl;
+
+    //StandAlone Properties
+    if(nmuon->outerTrack().isAvailable()){
+      const reco::TrackRef mutrackref = nmuon->outerTrack();
+      
+      STAMu_numberOfHits.push_back(mutrackref->numberOfValidHits());
+      STAMu_recHitsSize.push_back(mutrackref->recHitsSize());
+      STAMu_normchi2Mu.push_back(mutrackref->chi2()/mutrackref->ndof());
+      STAMu_dxyMu.push_back(mutrackref->dxy(beamspot.position()));
+      STAMu_dzMu.push_back(mutrackref->dz(beamspot.position()));
+      STAMu_vertex_vx.push_back(mutrackref->vx());
+      STAMu_vertex_vy.push_back(mutrackref->vy());
+      STAMu_vertex_vz.push_back(mutrackref->vz());
+      if(debug_){
+	std::cout << "mutrackref->vertex()"<< mutrackref->vertex()<< std::endl;
+	std::cout << "nmuon->vertex()"<< nmuon->vertex()<< std::endl;
+	std::cout <<std::endl;
+      }
+    } 
+
+    else{
+      STAMu_numberOfHits.push_back(-999.);
+      STAMu_recHitsSize.push_back(-999.);
+      STAMu_normchi2Mu.push_back(-999.);
+      STAMu_dxyMu.push_back(-999.);
+      STAMu_dzMu.push_back(-999.);
+      STAMu_vertex_vx.push_back(-999.);
+      STAMu_vertex_vy.push_back(-999.);
+      STAMu_vertex_vz.push_back(-999.);
+    }
+
+  
+    //Global Properties 
+    if(nmuon->globalTrack().isAvailable()){
+      const reco::TrackRef glbmutrackref = nmuon->globalTrack();
+      
+      GLBMu_normchi2Mu.push_back(glbmutrackref->normalizedChi2());
+      GLBMu_dxyMu.push_back(glbmutrackref->dxy(beamspot.position()));
+      GLBMu_dzMu.push_back(glbmutrackref->dz(beamspot.position()));
+      GLBMu_numberOfPixelHits.push_back(glbmutrackref->hitPattern().numberOfValidPixelHits());
+      GLBMu_numberOfTrackerHits.push_back(glbmutrackref->hitPattern().numberOfValidTrackerHits());
+      GLBMu_numberOfMuonsHits.push_back(glbmutrackref->hitPattern().numberOfValidMuonHits());
+      GLBMu_vertex_vx.push_back(glbmutrackref->vx());
+      GLBMu_vertex_vy.push_back(glbmutrackref->vy());
+      GLBMu_vertex_vz.push_back(glbmutrackref->vz());
+       
+      if(debug_){
+	std::cout << "glbmutrackref->vertex()"<< glbmutrackref->vertex()<< std::endl;
+	std::cout << "nmuon->vertex()"<< nmuon->vertex()<< std::endl;
+	std::cout <<std::endl;
+      }
+    }
+    else{
+      GLBMu_normchi2Mu.push_back(-999.);
+      GLBMu_dxyMu.push_back(-999.);
+      GLBMu_dzMu.push_back(-999.);
+      GLBMu_numberOfPixelHits.push_back(-999);
+      GLBMu_numberOfTrackerHits.push_back(-999);
+      GLBMu_numberOfMuonsHits.push_back(-999);
+      GLBMu_vertex_vx.push_back(-999.);
+      GLBMu_vertex_vy.push_back(-999.);
+      GLBMu_vertex_vz.push_back(-999.);
+    }
+    
+    //Tracker Properties    
+    if(nmuon->innerTrack().isAvailable()){
+      const reco::TrackRef inmutrackref = nmuon->innerTrack();
+      
+      int v = 0;
+      reco::Vertex pv;
+      reco::VertexCollection vertexCollection = *(privtxs.product());
+      for(reco::VertexCollection::const_iterator p = vertexCollection.begin(); p!=vertexCollection.end(); ++p){
+	if(v==0) pv=(*p);
+	v++;
+      }
+      
+      TRKMu_normchi2Mu.push_back(inmutrackref->normalizedChi2());
+      TRKMu_dxyMu.push_back(inmutrackref->dxy(beamspot.position()));
+      TRKMu_dzMu.push_back(inmutrackref->dz(beamspot.position()));
+      TRKMu_numberOfPixelHits.push_back(inmutrackref->hitPattern().numberOfValidPixelHits());
+      TRKMu_numberOfTrackerHits.push_back(inmutrackref->hitPattern().numberOfValidTrackerHits());
+      TRKMu_trackerLayersWithMeasurement.push_back(inmutrackref->hitPattern().trackerLayersWithMeasurement());
+      TRKMu_dzPV.push_back(fabs(inmutrackref->dz(pv.position())));
+	             
+      if(debug_){
+	std::cout << "inmutrackref->vertex()"<<inmutrackref->vertex()<< std::endl;
+	std::cout << "nmuon->vertex()"<< nmuon->vertex()<< std::endl;
+	std::cout <<std::endl;
+      }
+    }
+    else{
+      TRKMu_normchi2Mu.push_back(-999.);
+      TRKMu_dxyMu.push_back(-999.);
+      TRKMu_dzMu.push_back(-999.);      
+      TRKMu_numberOfPixelHits.push_back(-999);
+      TRKMu_numberOfTrackerHits.push_back(-999);
+      TRKMu_trackerLayersWithMeasurement.push_back(-999);
+      TRKMu_dzPV.push_back(-999);
+    }
+     
+
+    imuons++;
+  }
+  
+  return;
+}
+
+void HmumuNtuple_pat::fill_PFEle_variables(edm::Handle<pat::ElectronCollection> pfEle)
+{    
+  ipfelectrons     = 0;
+ 
+  for(pat::ElectronCollection::const_iterator ele=  pfEle->begin(); ele != pfEle->end(); ++ele){
+ 
+    if(debug_){
+      std::cout << "**** E L E C T R O N S ****" <<std::endl;
+      std::cout << "Pt   default = " <<ele->pt()<< std::endl;
+      std::cout << "Eta  default = " << ele->eta()<<std::endl;
+      
+    }   
+              
+    Ele_pt_pfele.push_back(ele->pt());
+  
+    Ele_px_pfele.push_back(ele->px());
+    Ele_py_pfele.push_back(ele->py());
+    Ele_pz_pfele.push_back(ele->pz());
+    Ele_en_pfele.push_back(ele->energy());
+    Ele_phi_pfele.push_back(ele->phi());  
+    Ele_eta_pfele.push_back(ele->eta());
+  
+    ipfelectrons++;
+  }
+  
+  return;
+}
+
+void HmumuNtuple_pat::fill_PFJet_variables(edm::Handle<edm::View<pat::Jet> > jets, edm::Handle<edm::ValueMap<float> > puJetIdMVA, edm::Handle<edm::ValueMap<int> > puJetIdFlag)
+{    
+  ipfjets     = 0;
+  bTagJetsHE  = 0;
+  bTagJetsHP  = 0;
+  bTagJetsCSV = 0;
+ 
+  // for(pat::JetCollection::const_iterator jet=  pfJets->begin(); jet != pfJets->end(); ++jet){
+  for ( unsigned int i=0; i<jets->size(); ++i ) {
+    const pat::Jet & jet = jets->at(i);
+
+    float  mva    = (*puJetIdMVA)[jets->refAt(i)];
+    int    idflag = (*puJetIdFlag)[jets->refAt(i)];
+    bool   passLoose = false;
+    bool   passMedium = false;
+    bool   passTight = false;
+    
+    double discriminatorHE  =-999.;
+    double discriminatorHP  =-999.;
+    double discriminatorCSV =-999.;
+
+    if( PileupJetIdentifier::passJetId( idflag, PileupJetIdentifier::kLoose ))  passLoose  = true;
+    if( PileupJetIdentifier::passJetId( idflag, PileupJetIdentifier::kMedium )) passMedium = true;
+    if( PileupJetIdentifier::passJetId( idflag, PileupJetIdentifier::kTight ))  passTight  = true;
+
+    if(debug_){
+      std::cout << "**** J E T ****" <<std::endl;
+      //   std::cout << "Pt   default = " <<jet->pt()<< "Pt  corretto = " << jet->correctedJet("L5Flavor","BOTTOM").pt()<< std::endl;
+      //     std::cout << "Eta  default = " <<jet->eta()<< "Eta corretto = " << jet->correctedJet("L5Flavor","BOTTOM").eta()<< std::endl;
+      //     std::cout << "btag default = " <<jet->bDiscriminator("trackCountingHighEffBJetTags")<< "btag corretto = " << jet->correctedJet("L5Flavor","BOTTOM").bDiscriminator("trackCountingHighEffBJetTags")<< std::endl;
+      
+      //     std::cout << "Pt   default = " <<jet->pt()<< "Pt  corretto = " << jet->correctedJet("L7Parton","BOTTOM").pt()<< std::endl;
+      //     std::cout << "Eta  default = " <<jet->eta()<< "Eta corretto = " << jet->correctedJet("L7Parton","BOTTOM").eta()<< std::endl;
+      //     std::cout << "btag default = " <<jet->bDiscriminator("trackCountingHighEffBJetTags")<< "btag corretto = " << jet->correctedJet("L7Parton","BOTTOM").bDiscriminator("trackCountingHighEffBJetTags")<< std::endl;
+
+      std::cout << "jet " << i << " pt " << jet.pt() << " eta " << jet.eta() << " PU JetID MVA " << mva << std::endl; 
+      if( PileupJetIdentifier::passJetId( idflag, PileupJetIdentifier::kLoose )) {
+	std::cout << " pass loose wp" << std::endl;
+      }
+      if( PileupJetIdentifier::passJetId( idflag, PileupJetIdentifier::kMedium )) {
+	std::cout << " pass medium wp"<< std::endl;
+      }
+      if( PileupJetIdentifier::passJetId( idflag, PileupJetIdentifier::kTight )) {
+	std::cout << " pass tight wp"<< std::endl;
+      }    
+      std::cout << "btag TCHE = " <<jet.bDiscriminator("trackCountingHighEffBJetTags")<< std::endl;
+      std::cout << "btag TCHP = " <<jet.bDiscriminator("trackCountingHighPurBJetTags")<< std::endl;
+      std::cout << "btag CSV  = " <<jet.bDiscriminator("combinedSecondaryVertexBJetTags")<< std::endl;
+    }   
+   
+    Jet_pt_pfjet.push_back(jet.pt());
+    Jet_px_pfjet.push_back(jet.px());
+    Jet_py_pfjet.push_back(jet.py());
+    Jet_pz_pfjet.push_back(jet.pz());
+    Jet_en_pfjet.push_back(jet.energy());
+    Jet_phi_pfjet.push_back(jet.phi());  
+    Jet_eta_pfjet.push_back(jet.eta());
+    Jet_Area_pfjet.push_back(jet.jetArea());
+
+    Jet_ChargedHadEn_pfjet.push_back(jet.chargedHadronEnergy());
+    Jet_NeutralHadEn_pfjet.push_back(jet.neutralHadronEnergy());
+    Jet_ChargedEmEn_pfjet.push_back(jet.chargedEmEnergy());
+    Jet_ChargedMuEn_pfjet.push_back(jet.chargedMuEnergy());
+    Jet_NeutralEmEn_pfjet.push_back(jet.neutralEmEnergy());
+    Jet_ChargedMultiplicity_pfjet.push_back(jet.chargedMultiplicity());
+    Jet_NeutralMultiplicity_pfjet.push_back(jet.neutralMultiplicity());
+    Jet_MuonMultiplicity_pfjet.push_back(jet.muonMultiplicity());   
+    Jet_ElectronMultiplicity_pfjet.push_back(jet.electronMultiplicity());   
+    
+    Jet_PUmva_pfjet.push_back(mva);   
+    Jet_PULoose_pfjet.push_back(passLoose);
+    Jet_PUMedium_pfjet.push_back(passMedium);
+    Jet_PUTight_pfjet.push_back(passTight);
+    
+    discriminatorHE = jet.bDiscriminator("trackCountingHighEffBJetTags");
+    if(discriminatorHE !=-100.) bTagJetsHE++;
+    
+    discriminatorHP = jet.bDiscriminator("TrackCountingHighPurBJetTags");
+    if(discriminatorHP !=-100.) bTagJetsHP++;
+    
+    discriminatorCSV = jet.bDiscriminator("combinedSecondaryVertexBJetTags");
+    if(discriminatorCSV !=-100. && discriminatorCSV !=-10.) bTagJetsCSV++;
+    
+    Jet_discriminatorHE_pfjet.push_back(discriminatorHE);  
+    Jet_discriminatorHP_pfjet.push_back(discriminatorHP); 
+    Jet_discriminatorCSV_pfjet.push_back(discriminatorCSV);  
+   
+    ipfjets++;
+  }
+  
+  return;
+}
+
+
+
+void HmumuNtuple_pat::fill_PFMET_variables(edm::Handle<pat::METCollection> pfMET)
+{
+  ipfmets = 0;
+
+  for(pat::METCollection::const_iterator met = pfMET->begin(); met != pfMET->end(); met++){
+    
+    if(debug_)  std::cout << "MEt = " << met->pt()<< std::endl; 
+    
+      Met_pt_pfmet.push_back(met->pt());
+      Met_phi_pfmet.push_back(met->phi());
+       
+    ipfmets++;
+  }
+  return;
+}
+
+
+void HmumuNtuple_pat::fill_rho_variables(edm::Handle<double> rho, edm::Handle<double> sigma)
+{
+  
+  RHO = *rho;
+  SIGMA = *sigma;
+  
+  if(debug_)   std::cout << "RHO = " << RHO << "   SIGMA = " << SIGMA << std::endl; 
+  
+  return;
+}
+
+
+void HmumuNtuple_pat::beginJob()
+{
+  outFile = new TFile(outFile_.c_str(), "RECREATE", "");
+  outFile->cd();
+  tree_ = new TTree ("DTTree", "CMSSW DT tree");
+  
+  //Event info
+  tree_->Branch("runnumber",&runnumber,"runnumber/I");
+  tree_->Branch("lumiblock",&lumiblock,"lumiblock/I");
+  tree_->Branch("eventNumber",&eventNumber,"eventNumber/l");
+  tree_->Branch("timestamp",&timestamp,"timestamp/F");
+  tree_->Branch("bunchXing",&bunchXing,"bunchXing/I");
+  tree_->Branch("orbitNum",&orbitNum,"orbitNum/I");
+ 
+  if (youwantNTuples_){  
+    tree_->Branch("rho", &RHO, "rho/D");
+    tree_->Branch("sigma", &SIGMA, "sigma/D");
+    
+    //Beamspot
+    tree_->Branch("NBeam",&iBeam,"NBeam/S");
+    tree_->Branch("BS_x",&BS_x,"BS_x/D");
+    tree_->Branch("BS_y",&BS_y,"BS_y/D"); 
+    tree_->Branch("BS_z",&BS_z,"BS_z/D");
+    tree_->Branch("BS_xerr",&BS_xerr,"BS_xerr/D");
+    tree_->Branch("BS_yerr",&BS_yerr,"BS_yerr/D");
+    tree_->Branch("BS_zerr",&BS_zerr,"BS_zerr/D");
+    tree_->Branch("BS_Wx",&BS_Wx,"BS_Wx/D"); 
+    tree_->Branch("BS_Wy",&BS_Wy,"BS_Wy/D");
+    tree_->Branch("BS_Wxerr",&BS_Wxerr,"BS_Wxerr/D");
+    tree_->Branch("BS_Wyerr",&BS_Wyerr,"BS_Wyerr/D");
+    tree_->Branch("BS_dxdz",&BS_dxdz,"BS_dxdz/D");
+    tree_->Branch("BS_dxdzerr",&BS_dxdzerr,"BS_dxdzerr/D");
+    tree_->Branch("BS_dydz",&BS_dydz,"BS_dydz/D");
+    tree_->Branch("BS_dydzerr",&BS_dydzerr,"BS_dydzerr/D");
+    
+    //genparticle
+    
+    if(MCtruth_){  
+      tree_->Branch("NGenP",&iGenP,"NGenP/S");
+      tree_->Branch("Genp_particleId",&Genp_particleId);  
+      tree_->Branch("Genp_status",&Genp_status);
+      tree_->Branch("Genp_pt",&Genp_pt);
+      tree_->Branch("Genp_p",&Genp_p);
+      tree_->Branch("Genp_et",&Genp_et);
+      tree_->Branch("Genp_e",&Genp_e);
+      tree_->Branch("Genp_mt",&Genp_mt);
+      tree_->Branch("Genp_m",&Genp_m);
+      tree_->Branch("Genp_eta",&Genp_eta);
+      tree_->Branch("Genp_phi",&Genp_phi);
+      tree_->Branch("Genp_vx",&Genp_vx);
+      tree_->Branch("Genp_vy",&Genp_vy);
+      tree_->Branch("Genp_vz",&Genp_vz);
+      
+      tree_->Branch("Genp_nMmothers",&Genp_nMmothers);
+      tree_->Branch("Genp_nDaughters",&Genp_nDaughters);
+      
+      tree_->Branch("Genp_particleId_mother",&Genp_particleId_mother);
+      tree_->Branch("Genp_status_mother",&Genp_status_mother);
+      tree_->Branch("Genp_pt_mother",&Genp_pt_mother);
+      tree_->Branch("Genp_eta_mother",&Genp_eta_mother);
+      tree_->Branch("Genp_phi_mother",&Genp_phi_mother);
+      
+      //Pileup
+      tree_->Branch("PU_Weight",&MyWeight,"MyWeight/D");
+      //     tree_->Branch("PU_Weight2011A",&MyWeight3D2011A,"MyWeight3D2011A/D");
+      //     tree_->Branch("PU_Weight2011B",&MyWeight3D2011B,"MyWeight3D2011B/D");
+    }
+    
+    //HLT
+    tree_->Branch("Nhlt",&ihlt,"Nhlt/S");
+    tree_->Branch("hlt_path",&hlt_path,32000,-1);
+    
+    //Primary vertex
+    tree_->Branch("PV_x",&PV_x);
+    tree_->Branch("PV_y",&PV_y);
+    tree_->Branch("PV_z",&PV_z);
+    tree_->Branch("PV_xerr",&PV_xerr);
+    tree_->Branch("PV_yerr",&PV_yerr);
+    tree_->Branch("PV_zerr",&PV_zerr);
+    
+    tree_->Branch("PV_normchi2",&PV_normchi2);
+    tree_->Branch("PV_chi2",&PV_chi2);
+    tree_->Branch("PV_ndof",&PV_ndof);
+    tree_->Branch("PV_ntracks", &PV_ntracks);
+    
+    tree_->Branch("PV_validity",&PV_validity);
+    tree_->Branch("PV_fake",&PV_fake);
+    tree_->Branch("PV_SumPtTracks", &PV_SumPtTracks);
+    
+    tree_->Branch("NPVtx",&ivtx,"NPVtx/S"); 
+    
+    //MUON variables
+    tree_->Branch("Mu_hasTriggered",&Mu_hasTriggered);	
+    tree_->Branch("Mu_pt",&Mu_pt_mu);
+    tree_->Branch("Mu_px",&Mu_px_mu);
+    tree_->Branch("Mu_py",&Mu_py_mu);
+    tree_->Branch("Mu_pz",&Mu_pz_mu);
+    tree_->Branch("Mu_en",&Mu_en_mu);
+    tree_->Branch("Mu_phi",&Mu_phi_mu);
+    tree_->Branch("Mu_eta",&Mu_eta_mu);
+    tree_->Branch("Mu_charge", &Mu_charge_mu);
+    
+    tree_->Branch("Mu_vertex_vx",&Mu_vertex_vx);
+    tree_->Branch("Mu_vertex_vy",&Mu_vertex_vy);
+    tree_->Branch("Mu_vertex_vz",&Mu_vertex_vz);
+    
+    tree_->Branch("Mu_isMuGlobal",&Mu_isMuGlobal);
+    tree_->Branch("Mu_isMuTracker",&Mu_isMuTracker);
+    tree_->Branch("Mu_isMuStandAlone",&Mu_isMuStandAlone);
+    tree_->Branch("Mu_numberOfChambers",&Mu_numberOfChambers);
+    tree_->Branch("Mu_numberOfMatches",&Mu_numberOfMatches);
+    tree_->Branch("Mu_numberOfMatchedStation",&Mu_numberOfMatchedStation);
+    tree_->Branch("Mu_dB",&Mu_dB);
+    
+    tree_->Branch("Mu_sumPtIsoR03",&Mu_sumPtIsoR03);
+    tree_->Branch("Mu_ntkIsoR03",&Mu_ntkIsoR03);
+    tree_->Branch("Mu_emIsoR03",&Mu_emIsoR03);
+    tree_->Branch("Mu_hadIsoR03",&Mu_hadIsoR03);
+    tree_->Branch("Mu_hoEtIsoR03",&Mu_hoEtIsoR03);
+    tree_->Branch("Mu_nJetsIsoR03", &Mu_nJetsIsoR03);
+    
+    tree_->Branch("Mu_sumPtIsoR05",&Mu_sumPtIsoR05);
+    tree_->Branch("Mu_ntkIsoR05",&Mu_ntkIsoR05);
+    tree_->Branch("Mu_emIsoR05",&Mu_emIsoR05);
+    tree_->Branch("Mu_hadIsoR05",&Mu_hadIsoR05);
+    tree_->Branch("Mu_hoEtIsoR05",&Mu_hoEtIsoR05);
+    tree_->Branch("Mu_nJetsIsoR05", &Mu_nJetsIsoR05);
+    
+    tree_->Branch("Mu_sumCHPtPFIsoR04",&Mu_sumCHPtPFIsoR04);
+    tree_->Branch("Mu_sumCPPtPFIsoR04",&Mu_sumCPPtPFIsoR04);
+    tree_->Branch("Mu_sumNHPtPFIsoR04",&Mu_sumNHPtPFIsoR04);
+    tree_->Branch("Mu_sumPhoEtPFIsoR04",&Mu_sumPhoEtPFIsoR04);
+    tree_->Branch("Mu_sumPUPtPFIsoR04",&Mu_sumPUPtPFIsoR04);
+
+    tree_->Branch("Mu_sumCHPtPFIsoR03",&Mu_sumCHPtPFIsoR03);
+    tree_->Branch("Mu_sumCPPtPFIsoR03",&Mu_sumCPPtPFIsoR03);
+    tree_->Branch("Mu_sumNHPtPFIsoR03",&Mu_sumNHPtPFIsoR03);
+    tree_->Branch("Mu_sumPhoEtPFIsoR03",&Mu_sumPhoEtPFIsoR03);
+    tree_->Branch("Mu_sumPUPtPFIsoR03",&Mu_sumPUPtPFIsoR03);
+    
+    tree_->Branch("Mu_calEnergyEm", &Mu_calEnergyEm);
+    tree_->Branch("Mu_calEnergyHad",&Mu_calEnergyHad);
+    tree_->Branch("Mu_calEnergyHo",&Mu_calEnergyHo);
+    tree_->Branch("Mu_calEnergyEmS9",&Mu_calEnergyEmS9);
+    tree_->Branch("Mu_calEnergyHadS9",&Mu_calEnergyHadS9);
+    tree_->Branch("Mu_calEnergyHoS9",&Mu_calEnergyHoS9);
+    
+    //standalone
+    tree_->Branch("Mu_numberOfHits_sta",&STAMu_numberOfHits);
+    tree_->Branch("Mu_recHitsSize",&STAMu_recHitsSize);
+    tree_->Branch("Mu_normchi2_sta",&STAMu_normchi2Mu);
+    tree_->Branch("Mu_dxy_sta",&STAMu_dxyMu);
+    tree_->Branch("Mu_dz_sta",&STAMu_dzMu);
+    tree_->Branch("Mu_vx_sta",&STAMu_vertex_vx);
+    tree_->Branch("Mu_vy_sta",&STAMu_vertex_vy);
+    tree_->Branch("Mu_vz_sta",&STAMu_vertex_vz);
+  
+    //global
+    tree_->Branch("Mu_normchi2_glb",&GLBMu_normchi2Mu);
+    tree_->Branch("Mu_dxy_glb",&GLBMu_dxyMu);
+    tree_->Branch("Mu_dz_glb",&GLBMu_dzMu);
+    tree_->Branch("Mu_numberOfPixelHits_glb",&GLBMu_numberOfPixelHits);
+    tree_->Branch("Mu_numberOfTrackerHits_glb",&GLBMu_numberOfTrackerHits);
+    tree_->Branch("Mu_numberOfMuonsHits_glb",&GLBMu_numberOfMuonsHits);
+    tree_->Branch("Mu_vx_glb",&GLBMu_vertex_vx);
+    tree_->Branch("Mu_vy_glb",&GLBMu_vertex_vy);
+    tree_->Branch("Mu_vz_glb",&GLBMu_vertex_vz);
+    
+
+    //tracker
+    tree_->Branch("Mu_normchi2_trk",&TRKMu_normchi2Mu);
+    tree_->Branch("Mu_dxy_trk",&TRKMu_dxyMu);
+    tree_->Branch("Mu_dz_trk",&TRKMu_dzMu);
+    tree_->Branch("Mu_numberOfPixelHits_trk",&TRKMu_numberOfPixelHits);
+    tree_->Branch("Mu_numberOfTrackerHits_trk",&TRKMu_numberOfTrackerHits);
+    tree_->Branch("Mu_dzPV_trk",&TRKMu_dzPV);
+    tree_->Branch("Mu_trackerLayersWithMeasurement_trk",&TRKMu_trackerLayersWithMeasurement);
+    
+    tree_->Branch("Nmuons",&imuons,"Nmuons/S");
+    tree_->Branch("NGlobalMuons",&GlobalMuons,"NGlobalMuons/S");
+    tree_->Branch("NTrackerMuons",&TrackerMuons,"NTrackerMuons/S");
+    tree_->Branch("NStandAloneMuons",&StandAloneMuons,"NStandAloneMuons/S");
+    
+    // PFJET
+    tree_->Branch("NpfJets",&ipfjets,"NpfJets/S");
+    tree_->Branch("NbTagHE_pfJets",&bTagJetsHP,"NbTagHE_pfJets/S");
+    tree_->Branch("NbTagHP_pfJets",&bTagJetsHP,"NbTagHP_pfJets/S");
+    
+    tree_->Branch("Jet_PUmva_pfjet",&Jet_PUmva_pfjet);
+    tree_->Branch("Jet_PULoose_pfjet",&Jet_PULoose_pfjet);
+    tree_->Branch("Jet_PUMedium_pfjet",&Jet_PUMedium_pfjet);
+    tree_->Branch("Jet_PUTight_pfjet",&Jet_PUTight_pfjet);
+
+    tree_->Branch("Jet_pt_pfjet",&Jet_pt_pfjet);
+    tree_->Branch("Jet_ptL5_pfjet",&Jet_ptL5_pfjet);
+    tree_->Branch("Jet_ptL7_pfjet",&Jet_ptL7_pfjet);  
+    tree_->Branch("Jet_px_pfjet",&Jet_px_pfjet);
+    tree_->Branch("Jet_py_pfjet",&Jet_py_pfjet);
+    tree_->Branch("Jet_pz_pfjet",&Jet_pz_pfjet);
+    tree_->Branch("Jet_en_pfjet",&Jet_en_pfjet);
+    tree_->Branch("Jet_phi_pfjet",&Jet_phi_pfjet);  
+    tree_->Branch("Jet_eta_pfjet",&Jet_eta_pfjet);
+    tree_->Branch("Jet_Area_pfjet",&Jet_Area_pfjet);
+    
+    tree_->Branch("Jet_ChargedHadEn_pfjet",&Jet_ChargedHadEn_pfjet);
+    tree_->Branch("Jet_NeutralHadEn_pfjet",&Jet_NeutralHadEn_pfjet);
+    tree_->Branch("Jet_ChargedEmEn_pfjet",&Jet_ChargedEmEn_pfjet);
+    tree_->Branch("Jet_ChargedMuEn_pfjet",&Jet_ChargedMuEn_pfjet);
+    tree_->Branch("Jet_NeutralEmEn_pfjet",&Jet_NeutralEmEn_pfjet);
+    tree_->Branch("Jet_ChargedMultiplicity_pfjet",&Jet_ChargedMultiplicity_pfjet);
+    tree_->Branch("Jet_NeutralMultiplicity_pfjet",&Jet_NeutralMultiplicity_pfjet);
+    tree_->Branch("Jet_MuonMultiplicity_pfjet",&Jet_MuonMultiplicity_pfjet);   
+    tree_->Branch("Jet_ElectronMultiplicity_pfjet",&Jet_ElectronMultiplicity_pfjet);  
+    
+    tree_->Branch("Jet_discriminatorHE_pfjet",&Jet_discriminatorHE_pfjet);
+    tree_->Branch("Jet_discriminatorHP_pfjet",&Jet_discriminatorHP_pfjet);
+    tree_->Branch("Jet_discriminatorCSV_pfjet",&Jet_discriminatorCSV_pfjet);
+     
+    // PFELECTRONS
+    tree_->Branch("NpfElectrons",&ipfelectrons,"NpfElectrons/S");
+    
+    tree_->Branch("Ele_pt_pfele",&Ele_pt_pfele);
+    
+    tree_->Branch("Ele_px_pfele",&Ele_px_pfele);
+    tree_->Branch("Ele_py_pfele",&Ele_py_pfele);
+    tree_->Branch("Ele_pz_pfele",&Ele_pz_pfele);
+    tree_->Branch("Ele_en_pfele",&Ele_en_pfele);
+    tree_->Branch("Ele_phi_pfele",&Ele_phi_pfele);  
+    tree_->Branch("Ele_eta_pfele",&Ele_eta_pfele);
+   
+    //PFMET
+    tree_->Branch("NpfMet",&ipfmets,"NpfMet/S");
+    tree_->Branch("Met_pt_pfmet",&Met_pt_pfmet);
+    tree_->Branch("Met_phi_pfmet",&Met_phi_pfmet);
+  }
+  
+  if (youwantAnalysis_){
+    tree_->Branch("tmu_2",&tmu_2);
+    tree_->Branch("tmu_1",&tmu_1);
+    
+    tree_->Branch("tMass_2mucut",&tMass_2mucut);
+    tree_->Branch("tMass_MEtcut",&tMass_MEtcut);
+    tree_->Branch("tMass_final_1jet",&tMass_final_1jet);
+    tree_->Branch("tMass_final_jetVeto",&tMass_final_jetVeto);
+    
+    tree_->Branch("tMEt_2mucut",&tMEt_2mucut);
+    tree_->Branch("tMEt_MEtcut",&tMEt_MEtcut);
+  
+    tree_->Branch("tJet_pt_2mucut",&tJet_pt_2mucut);
+    tree_->Branch("tJet_eta_2mucut",&tJet_eta_2mucut);
+    tree_->Branch("tJet_bDisc_2mucut",&tJet_bDisc_2mucut);
+    tree_->Branch("tJet_pt_MEtcut",&tJet_pt_MEtcut);
+    tree_->Branch("tJet_eta_MEtcut",&tJet_eta_MEtcut);
+    tree_->Branch("tJet_bDisc_MEtcut",&tJet_bDisc_MEtcut);
+    tree_->Branch("tJet_pt_bcut",&tJet_pt_bcut);
+    tree_->Branch("tJet_eta_bcut",&tJet_eta_bcut);
+    tree_->Branch("tJet_bDisc_bcut",&tJet_bDisc_bcut);
+
+    tree_->Branch("tJet_Leadingpt_bcut",&tJet_Leadingpt_bcut);
+    tree_->Branch("tJet_LeadingptL7_bcut",&tJet_LeadingptL7_bcut);
+    tree_->Branch("tJet_Leadingeta_bcut",&tJet_Leadingeta_bcut);
+    tree_->Branch("tJet_LeadingbDisc_bcut",&tJet_LeadingbDisc_bcut);
+    tree_->Branch("tJet_Secondpt_bcut",&tJet_Secondpt_bcut);
+    tree_->Branch("tJet_SecondptL7_bcut",&tJet_SecondptL7_bcut);
+    tree_->Branch("tJet_Secondeta_bcut",&tJet_Secondeta_bcut);
+    tree_->Branch("tJet_SecondbDisc_bcut",&tJet_SecondbDisc_bcut);
+
+    hN_events_count  = new TH1D("N_events_count","N_events_count",11,0.,11.);
+    hN_events_eff    = new TH1D("N_events_eff","Efficiency",11,0.,11.);
+    hN_events_count_W  = new TH1D("N_events_count_W","N_events_count reweight",11,0.,11.);
+    hN_events_eff_W    = new TH1D("N_events_eff_W","Efficiency reweight",11,0.,11.);
+    
+    hPrimaryVertex = new TH1I("PrimaryVertex","Number of PV", 100,0,100); 
+
+    hMass_gen = new TH1F("Mass_gen","Invariant mass of generated muons",100,60.,200.);
+   
+    hmu_1 = new TH1F("mu_1","Highest pt muon with muon cuts",100,0.,200.);
+    hmu_2 = new TH1F("mu_2","2 Highest pt muon with muon cuts",100,0.,200.);
+   
+    hMass_2mucut = new TH1F("Mass_2mucut","Invariant mass of 2 muons after muon cuts", 100,100.,300.);
+    hMass_MEtcut = new TH1F("Mass_MEtcut","Invariant mass of 2 muons after MEt cut", 100,100.,300.);
+    hMass_final_1jet = new TH1F("Mass_final_1jet","Invariant mass of 2 muons after all cuts with 1 jet at least", 100,100.,300.);
+    hMass_final_jetVeto = new TH1F("Mass_final_jetVeto","Invariant mass of 2 muons after all cuts with 2 jets at least", 100,100.,300.);
+   
+    hMEt_2mucut= new TH1F("MEt_2mucut","Missing Et ", 50,0.,200.);
+    hMEt_generator= new TH1F("MEt_generator","Missing Et gen", 50,0.,200.);
+    hMEt_MEtcut= new TH1F("MEt_MEtcut","Missing Et ", 50,0.,200.);
+
+    hMEt_generator_stefano= new TH1F("MEt_generator_stefano","Missing Et gen", 50,0.,100.);
+    hMu_gen_pt = new TH1F("Mu_gen_pt","pt dei muoni generato", 250, 0., 500.);
+    hb_gen_pt = new TH1F("b_gen_pt","pt dei b generato", 250, 0., 500.);
+    hH_gen_pt = new TH1F("H_gen_pt","pt dell'higgs generato", 250, 0., 500.);
+    hAllParticles = new TH1F("AllParticles","pt di tutte le particelle di pythia", 250, 0., 500.);
+
+    
+    hJet_pt_2mucut = new TH1F("Jet_pt_2mucut","Jet pt after muon cuts", 50,0.,200.);
+    hJet_eta_2mucut = new TH1F("Jet_eta_2mucut","Jet eta after muon cuts", 50,-6.,6.);
+    hJet_bDisc_2mucut = new TH1F("Jet_bDisc_2mucut","Jet bDisc after muon cuts", 50,-1.5,1.5);
+    hJet_pt_MEtcut = new TH1F("Jet_pt_MEtcut","Jet pt after MEt cut", 50,0.,200.);
+    hJet_eta_MEtcut = new TH1F("Jet_eta_MEtcut","Jet eta after MEt cut", 50,-6.,6.);
+    hJet_bDisc_MEtcut = new TH1F("Jet_bDisc_MEtcut","Jet bDisc after MEt cut", 50,-1.5,1.5);
+    hJet_pt_bcut = new TH1F("Jet_pt_bcut","Jet pt after btag cut", 50,0.,200.);
+    hJet_eta_bcut = new TH1F("Jet_eta_bcut","Jet eta after btag cut", 50,-6.,6.);
+    hJet_bDisc_bcut = new TH1F("Jet_bDisc_bcut","Jet bDisc after btag cut", 50,-1.5,1.5);
+ 
+    hJEC_Unc = new TH1F("JEC_Unc","Jet Correction Uncertainties", 100, 0.,1.);
+
+    hJet_Leadingpt_bcut = new TH1F("Jet_Leadingpt_bcut","Highest Pt Jet after btag cut", 50,0.,200.);
+    hJet_LeadingptL7_bcut = new TH1F("Jet_LeadingptL7_bcut","Highest PtL7 Jet after btag cut", 50,0.,200.);
+    hJet_Leadingeta_bcut = new TH1F("Jet_Leadingeta_bcut","Eta of Leading Pt Jet after btag cut", 50,-6.,6.);
+    hJet_LeadingbDisc_bcut = new TH1F("Jet_LeadingbDisc_bcut","bDisc of Leading Pt Jet after btag cut", 50,-1.5,1.5);
+    hJet_Secondpt_bcut = new TH1F("Jet_Secondpt_bcut","Second Pt Jet after btag cut", 50,0.,200.);
+    hJet_SecondptL7_bcut = new TH1F("Jet_SecondptL7_bcut","Second PtL7 Jet after btag cut", 50,0.,200.);
+    hJet_Secondeta_bcut = new TH1F("Jet_Secondeta_bcut","Eta of Second Pt Jet after btag cut", 50,-6.,6.);
+    hJet_SecondbDisc_bcut = new TH1F("Jet_SecondbDisc_bcut","bDisc of Second Pt Jet after btag cut", 50,-1.5,1.5);
+      
+    hNJet = new TH1F("NJet","# of Jets after muon cuts",100,0,100);
+    hNJet_MEtcut = new TH1I("NJet_MEtcut","# of Jets after MEt cut", 50,0,20);
+    hNbJet = new TH1I("NbJet","# of b Jets after MEt cut",20,0,20);
+    hNbJet_Jetcut = new TH1I("NbJet_Jetcut","# of b Jets after pt cut",10,0,10);
+  
+    hDzVertex= new TH1F("DzVertex","",100,0.,.1) ;
+    hRho= new TH1F("Rho","",200,0.,1.); 
+    hDeltaB= new TH1F("DeltaB","",200,0.,1.); 
+
+    wpdfNNPDF = -999.;
+    wpdfMSTW   = -999.;
+    pdf1 = -999.;
+    pdf2 = -999.;
+
+    eventi_iniziali= 0;
+    eventi_Trigger = 0;
+    eventi_Quality = 0;
+    eventi_Iso     = 0;
+    eventi_MuonSel = 0;
+    eventi_Minv    = 0;
+    eventi_MEt     = 0;
+    eventi_finali  = 0;
+    eventi_finali_cat2  = 0;
+    eventi_finali_jetVeto  = 0;
+    eventi_iniziali_W = 0;
+    eventi_Trigger_W  = 0;
+    eventi_Quality_W  = 0;
+    eventi_Iso_W      = 0;
+    eventi_MuonSel_W  = 0;
+    eventi_Minv_W     = 0;
+    eventi_MEt_W      = 0;
+    eventi_finali_W   = 0;
+    eventi_finali_jetVeto_W   = 0;
+    
+    eventi_finali_W_NNPDF = 0;
+    eventi_finali_W_MSTW = 0;
+    eventi_iniziali_W_NNPDF = 0;
+    eventi_iniziali_W_MSTW = 0 ;
+    eventi_finali_cat2_W_NNPDF = 0;
+    eventi_finali_cat2_W_MSTW  = 0;
+
+    eventi_Minv_wpdfNNPDF= 0;
+    eventi_Minv_wpdfMSTW= 0;
+
+    eventi_JEScutUP = 0;
+    eventi_JEScutDOWN = 0;
+    eventi_JEScutBASE = 0;
+  }
+  
+  return;
+}
+
+
+void HmumuNtuple_pat::endJob()
+{
+  outFile           ->cd();
+  tree_             ->Write();
+  
+  if(youwantAnalysis_){
+    
+    hN_events_count_W->Fill(1,eventi_iniziali_W);
+    hN_events_eff_W->Fill(1,eventi_iniziali_W/eventi_iniziali_W);
+    hN_events_count_W->Fill(2,eventi_Trigger_W);
+    hN_events_eff_W->Fill(2,eventi_Trigger_W/eventi_iniziali_W);
+    hN_events_count_W->Fill(3,eventi_Quality_W);
+    hN_events_eff_W->Fill(3,eventi_Quality_W/eventi_iniziali_W);
+    hN_events_count_W->Fill(4,eventi_Iso_W);
+    hN_events_eff_W->Fill(4,eventi_Iso_W/eventi_iniziali_W);
+    hN_events_count_W->Fill(5,eventi_MuonSel_W);
+    hN_events_eff_W->Fill(5,eventi_MuonSel_W/eventi_iniziali_W);
+    hN_events_count_W->Fill(6,eventi_Minv_W);
+    hN_events_eff_W->Fill(6,eventi_Minv_W/eventi_iniziali_W);
+    hN_events_count_W->Fill(7,eventi_MEt_W);
+    hN_events_eff_W->Fill(7,eventi_MEt_W/eventi_iniziali_W);	
+    hN_events_count_W->Fill(8,eventi_finali_W);
+    hN_events_eff_W->Fill(8,eventi_finali_W/eventi_iniziali_W);
+    hN_events_count_W->Fill(9,eventi_finali_jetVeto_W);
+    hN_events_eff_W->Fill(9,eventi_finali_jetVeto_W/eventi_iniziali_W);
+
+    hN_events_count->Fill(1,eventi_iniziali);
+    hN_events_eff->Fill(1,eventi_iniziali/eventi_iniziali);
+    hN_events_count->Fill(2,eventi_Trigger);
+    hN_events_eff->Fill(2,eventi_Trigger/eventi_iniziali);
+    hN_events_count->Fill(3,eventi_Quality);
+    hN_events_eff->Fill(3,eventi_Quality/eventi_iniziali);
+    hN_events_count->Fill(4,eventi_Iso);
+    hN_events_eff->Fill(4,eventi_Iso/eventi_iniziali);
+    hN_events_count->Fill(5,eventi_MuonSel);
+    hN_events_eff->Fill(5,eventi_MuonSel/eventi_iniziali);
+    hN_events_count->Fill(6,eventi_Minv);
+    hN_events_eff->Fill(6,eventi_Minv/eventi_iniziali);
+    hN_events_count->Fill(7,eventi_MEt);
+    hN_events_eff->Fill(7,eventi_MEt/eventi_iniziali);	
+    hN_events_count->Fill(8,eventi_finali);
+    hN_events_eff->Fill(8,eventi_finali/eventi_iniziali);
+    hN_events_count->Fill(9,eventi_finali_jetVeto);
+    hN_events_eff->Fill(9,eventi_finali_jetVeto/eventi_iniziali);
+    hN_events_count->Fill(10,eventi_finali_cat2);
+    hN_events_eff->Fill(10,eventi_finali_cat2/eventi_iniziali);
+    
+    hN_events_count   ->Write();
+    hN_events_eff     ->Write();
+    hN_events_count_W   ->Write();
+    hN_events_eff_W     ->Write();
+    
+    hMass_gen         ->Write();
+
+    hPrimaryVertex    ->Write();
+
+    hmu_1             ->Write();
+    hmu_2             ->Write();
+    
+    hMass_2mucut      ->Write();
+    hMass_MEtcut      ->Write();
+    hMass_final_1jet  ->Write();
+    hMass_final_jetVeto ->Write();
+
+    hMEt_2mucut       ->Write();
+    hMEt_generator    ->Write();
+    hMEt_generator_stefano->Write();
+    
+    hMu_gen_pt->Write();
+    hb_gen_pt->Write();
+    hH_gen_pt->Write();
+    hAllParticles->Write();
+     
+    hMEt_MEtcut       ->Write();
+    
+    hJet_pt_2mucut    ->Write();
+    hJet_eta_2mucut   ->Write();
+    hJet_bDisc_2mucut ->Write();
+    hJet_pt_MEtcut    ->Write();
+    hJet_eta_MEtcut   ->Write();
+    hJet_bDisc_MEtcut ->Write();
+    hJet_pt_bcut      ->Write();
+    hJet_eta_bcut     ->Write();
+    hJet_bDisc_bcut   ->Write();
+
+    hJEC_Unc          ->Write();
+
+    hJet_Leadingpt_bcut    ->Write();
+    hJet_LeadingptL7_bcut  ->Write();
+    hJet_Leadingeta_bcut   ->Write();
+    hJet_LeadingbDisc_bcut ->Write();
+    hJet_Secondpt_bcut     ->Write();
+    hJet_SecondptL7_bcut   ->Write();
+    hJet_Secondeta_bcut    ->Write();
+    hJet_SecondbDisc_bcut  ->Write();
+       
+    hNJet             ->Write();
+    hNJet_MEtcut      ->Write();
+    hNbJet            ->Write();    
+    hNbJet_Jetcut     ->Write();
+
+    hDzVertex->Write();
+    hRho->Write();
+    hDeltaB->Write();
+
+    // std::cout<< std::endl;
+    //     std::cout<< "eventi_Trigger_W = " << eventi_Trigger_W << "   Efficiency = " <<eventi_Trigger_W/eventi_iniziali_W<<  std::endl;
+    //     std::cout<< "eventi_Trigger   = " << eventi_Trigger << "   Efficiency = " <<eventi_Trigger/eventi_iniziali<<  std::endl;
+    //     std::cout<< "eventi_Quality_W = " << eventi_Quality_W << "   Efficiency = " <<eventi_Quality_W/eventi_iniziali_W<<  std::endl;
+    //     std::cout<< "eventi_Quality   = " << eventi_Quality << "   Efficiency = " <<eventi_Quality/eventi_iniziali<<  std::endl;
+    //     std::cout<< "eventi_Iso_W     = " << eventi_Iso_W     << "   Efficiency = " <<eventi_Iso_W/eventi_iniziali_W<<  std::endl;
+    //     std::cout<< "eventi_Iso       = " << eventi_Iso     << "   Efficiency = " <<eventi_Iso/eventi_iniziali<<  std::endl;
+    //     std::cout<< "eventi_MuonSel_W = " << eventi_MuonSel_W << "   Efficiency = " <<eventi_MuonSel_W/eventi_iniziali_W<<  std::endl;
+    //     std::cout<< "eventi_MuonSel   = " << eventi_MuonSel << "   Efficiency = " <<eventi_MuonSel/eventi_iniziali<<  std::endl;
+    //     std::cout<< "eventi_Minv_W    = " << eventi_Minv_W    << "   Efficiency = " <<eventi_Minv_W/eventi_iniziali_W<<  std::endl;
+    //     std::cout<< "eventi_Minv      = " << eventi_Minv    << "   Efficiency = " <<eventi_Minv/eventi_iniziali<<  std::endl;
+    //     std::cout<< "eventi_MEt_W     = " << eventi_MEt_W     << "   Efficiency = " <<eventi_MEt_W/eventi_iniziali_W<<  std::endl;
+    //     std::cout<< "eventi_MEt       = " << eventi_MEt     << "   Efficiency = " <<eventi_MEt/eventi_iniziali<<  std::endl;
+    //     std::cout<< "eventi finali_W  = " << eventi_finali_W  << "   Efficiency = " <<eventi_finali_W/eventi_iniziali_W<<std::endl;
+   
+    std::cout << "Efficiency per le PDF unc. calcolata sul numero di eventi preselezionati" <<std::endl;
+   //  std::cout << "eventi finali = " << eventi_finali  << "  Efficiency = " << eventi_finali/eventi_iniziali << "  *** NNPDF = " << eventi_Minv_wpdfNNPDF/2000 <<"  *** MSTW = " << eventi_Minv_wpdfMSTW/2000 <<std::endl;
+    
+
+    std::cout<< "Ev. iniziali normali = " << eventi_iniziali << "  Ev. finali = " << eventi_Minv << "  Eff. = " << eventi_Minv/eventi_iniziali <<std::endl;
+
+    std::cout<< "Ev. iniziali NNPDF   = " << eventi_iniziali_W_NNPDF << "  Ev. finali = " << eventi_Minv_wpdfNNPDF << "  Eff. = " << eventi_Minv_wpdfNNPDF/eventi_iniziali_W_NNPDF<<std::endl;
+  
+    std::cout<< "Ev. iniziali MTSW = " << eventi_iniziali_W_MSTW << "  Ev. finali = " << eventi_Minv_wpdfMSTW << "  Eff.  = " << eventi_Minv_wpdfMSTW/eventi_iniziali_W_MSTW << std::endl;
+
+    std::cout << "Eff. relativa NNPDF = " << eventi_Minv_wpdfNNPDF/eventi_Minv << "  Eff. relativa MSTW  = " << eventi_Minv_wpdfMSTW/eventi_Minv<<std::endl;
+    
+    
+    //  std::cout << "Efficiency per le JES unc. calcolata sul numero di eventi preselezionati" <<std::endl;
+    
+    //     std::cout << "Eff. base = " << eventi_JEScutBASE/2000 << "  Eff. scale UP  = " << eventi_JEScutUP/2000 << "  Eff. scale DOWN  = " << eventi_JEScutDOWN/2000 << std::endl;
+    
+    //     std::cout << "Eventi finali Cat1. = " << eventi_finali/2000 << "  Cat2. = " << eventi_finali_cat2/2000 <<  std::endl;
+    
+  } 
+  
+  outFile           ->Close();
+  
+  return;
+}
+
+inline void HmumuNtuple_pat::clear_Arrays()
+{
+  if(youwantAnalysis_){  
+    tmu_1             .clear();
+    tmu_2             .clear();
+    
+    tMass_2mucut      .clear();
+    tMass_MEtcut      .clear();
+    tMass_final_1jet  .clear();
+    tMass_final_jetVeto.clear();
+    
+    tMEt_2mucut       .clear();
+    tMEt_MEtcut       .clear();
+    
+    tJet_pt_2mucut    .clear();
+    tJet_eta_2mucut   .clear();
+    tJet_bDisc_2mucut .clear();
+    tJet_pt_MEtcut    .clear();
+    tJet_eta_MEtcut   .clear();
+    tJet_bDisc_MEtcut .clear();
+    tJet_pt_bcut      .clear();
+    tJet_eta_bcut     .clear();
+    tJet_bDisc_bcut   .clear();
+    
+    tJet_Leadingpt_bcut    .clear();
+    tJet_LeadingptL7_bcut  .clear();
+    tJet_Leadingeta_bcut   .clear();
+    tJet_LeadingbDisc_bcut .clear();
+    tJet_Secondpt_bcut    .clear();
+    tJet_SecondptL7_bcut  .clear();
+    tJet_Secondeta_bcut   .clear();
+    tJet_SecondbDisc_bcut .clear();
+  } 
+  
+  if(youwantNTuples_){  
+    //HLT
+    hlt_path.clear();
+    
+    //primary vertex
+    PV_x.clear();
+    PV_y.clear(); 
+    PV_z.clear();
+    PV_xerr.clear();
+    PV_yerr.clear();
+    PV_zerr.clear();
+    PV_validity.clear();
+    PV_fake.clear();
+    PV_normchi2.clear();
+    PV_chi2.clear();
+    PV_ndof.clear();
+    PV_ntracks.clear();
+    PV_SumPtTracks.clear();
+    
+    //muon variables
+    Mu_hasTriggered.clear();
+    Mu_isMuGlobal.clear();
+    Mu_isMuTracker.clear();
+    Mu_isMuStandAlone.clear();
+    Mu_numberOfChambers.clear();
+    Mu_numberOfMatches.clear();
+    Mu_numberOfMatchedStation.clear();
+    Mu_dB.clear();
+    
+    Mu_pt_mu.clear();
+    Mu_px_mu.clear();
+    Mu_py_mu.clear();
+    Mu_pz_mu.clear();
+    Mu_en_mu.clear();
+    Mu_phi_mu.clear();
+    Mu_eta_mu.clear();
+    Mu_charge_mu.clear();
+    
+    Mu_vertex_vx.clear();
+    Mu_vertex_vy.clear();
+    Mu_vertex_vz.clear();
+    
+    Mu_sumPtIsoR03.clear();
+    Mu_ntkIsoR03.clear();
+    Mu_emIsoR03.clear();
+    Mu_hadIsoR03.clear();
+    Mu_hoEtIsoR03.clear();
+    Mu_nJetsIsoR03.clear();
+    Mu_sumPtIsoR05.clear();
+    Mu_ntkIsoR05.clear();
+    Mu_emIsoR05.clear();
+    Mu_hadIsoR05.clear();
+    Mu_hoEtIsoR05.clear();
+    Mu_nJetsIsoR05.clear();
+    
+    Mu_sumCHPtPFIsoR04.clear();
+    Mu_sumCPPtPFIsoR04.clear();
+    Mu_sumNHPtPFIsoR04.clear();
+    Mu_sumPhoEtPFIsoR04.clear();
+    Mu_sumPUPtPFIsoR04.clear();
+
+    Mu_sumCHPtPFIsoR03.clear();
+    Mu_sumCPPtPFIsoR03.clear();
+    Mu_sumNHPtPFIsoR03.clear();
+    Mu_sumPhoEtPFIsoR03.clear();
+    Mu_sumPUPtPFIsoR03.clear();    
+
+    Mu_calEnergyEm.clear();
+    Mu_calEnergyHad.clear();
+    Mu_calEnergyHo.clear();
+    Mu_calEnergyEmS9.clear();
+    Mu_calEnergyHadS9.clear();
+    Mu_calEnergyHoS9.clear();
+    
+    STAMu_numberOfHits.clear();
+    STAMu_recHitsSize.clear();
+    STAMu_normchi2Mu.clear();
+    STAMu_dxyMu.clear();
+    STAMu_dzMu.clear();
+    STAMu_vertex_vx.clear();
+    STAMu_vertex_vy.clear();
+    STAMu_vertex_vz.clear();
+    
+    GLBMu_normchi2Mu.clear();
+    GLBMu_dxyMu.clear();
+    GLBMu_dzMu.clear();
+    GLBMu_numberOfPixelHits.clear();
+    GLBMu_numberOfTrackerHits.clear();
+    GLBMu_numberOfMuonsHits.clear();
+    GLBMu_vertex_vx.clear();
+    GLBMu_vertex_vy.clear();
+    GLBMu_vertex_vz.clear();
+    
+    TRKMu_normchi2Mu.clear();
+    TRKMu_dxyMu.clear();
+    TRKMu_dzMu.clear();
+    TRKMu_numberOfPixelHits.clear();
+    TRKMu_numberOfTrackerHits.clear();
+    TRKMu_dzPV.clear();
+    TRKMu_trackerLayersWithMeasurement.clear();
+    
+    //PFJET
+    Jet_PUmva_pfjet.clear();
+    Jet_PULoose_pfjet.clear();
+    Jet_PUMedium_pfjet.clear();
+    Jet_PUTight_pfjet.clear();
+
+    Jet_pt_pfjet.clear();
+    Jet_ptL5_pfjet.clear();
+    Jet_ptL7_pfjet.clear();
+    Jet_px_pfjet.clear();
+    Jet_py_pfjet.clear();
+    Jet_pz_pfjet.clear();
+    Jet_en_pfjet.clear();
+    Jet_phi_pfjet.clear();  
+    Jet_eta_pfjet.clear();
+    Jet_Area_pfjet.clear();
+    
+    Jet_ChargedHadEn_pfjet.clear();
+    Jet_NeutralHadEn_pfjet.clear();
+    Jet_ChargedEmEn_pfjet.clear();
+    Jet_ChargedMuEn_pfjet.clear();
+    Jet_NeutralEmEn_pfjet.clear();
+    Jet_ChargedMultiplicity_pfjet.clear();
+    Jet_NeutralMultiplicity_pfjet.clear();
+    Jet_MuonMultiplicity_pfjet.clear();   
+    Jet_ElectronMultiplicity_pfjet.clear();   
+    
+    Jet_discriminatorHE_pfjet.clear();
+    Jet_discriminatorHP_pfjet.clear();
+    Jet_discriminatorCSV_pfjet.clear();
+  
+    //PFELECTRONS
+    Ele_pt_pfele.clear();
+    Ele_px_pfele.clear();
+    Ele_py_pfele.clear();
+    Ele_pz_pfele.clear();
+    Ele_en_pfele.clear();
+    Ele_phi_pfele.clear();  
+    Ele_eta_pfele.clear();
+    
+    //PFMET
+    Met_pt_pfmet.clear();
+    Met_phi_pfmet.clear();
+
+    //genparticle
+    if(MCtruth_){
+      Genp_particleId.clear();  
+      Genp_status.clear();
+      Genp_pt.clear();
+      Genp_p.clear();
+      Genp_et.clear();
+      Genp_e.clear();
+      Genp_mt.clear();
+      Genp_m.clear();
+      Genp_eta.clear();
+      Genp_phi.clear();
+      Genp_vx.clear();
+      Genp_vy.clear();
+      Genp_vz.clear();  
+      Genp_nMmothers.clear();
+      Genp_nDaughters.clear();
+      
+      Genp_particleId_mother.clear();
+      Genp_status_mother.clear();
+      Genp_pt_mother.clear();
+      Genp_eta_mother.clear();
+      Genp_phi_mother.clear();
+    }
+  }
+  return;
+}
+
+void HmumuNtuple_pat::initialize_Tree_variables()
+{
+  //Event variables
+  runnumber   = 0;
+  lumiblock   = 0;
+  eventNumber = 0;
+  timestamp   = 0.;
+  bunchXing   = 0;
+  orbitNum    = 0;
+  
+  if(youwantNTuples_){  
+    BS_x        = 0;
+    BS_y        = 0;
+    BS_z        = 0;
+    BS_xerr     = 0;
+    BS_yerr     = 0;
+    BS_zerr     = 0;
+    BS_Wx       = 0;
+    BS_Wxerr    = 0;
+    BS_Wy       = 0;
+    BS_Wyerr    = 0;
+    BS_dxdz     = 0;
+    BS_dxdzerr  = 0;
+    BS_dydz     = 0;
+    BS_dydzerr  = 0;
+    
+    RHO         = 0;
+    SIGMA       = 0;
+  }
+  
+  if(MCtruth_) MyWeight = -99.;
+  
+  return;
+}
+
+//define this as a plug-in
+DEFINE_FWK_MODULE(HmumuNtuple_pat);
