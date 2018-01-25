@@ -1,4 +1,3 @@
-
 //This is the list and types of the variables saved in the TTree;
 //New variables must be declared here
 
@@ -67,7 +66,9 @@ std::vector<double> PV_position;
 
 //muon variables
 std::vector<bool>  Mu_hasTriggeredIso;
+std::vector<bool>  Mu_hasTriggeredIsoEr;
 std::vector<bool>  Mu_hasTriggeredIsoTk;
+std::vector<bool>  Mu_hasTriggeredIsoTkEr;
 std::vector<bool>  Mu_hasTriggeredMu50;
 std::vector<bool>  Mu_hasTriggeredTkMu50;
 std::vector<float>  Mu_roch_correction;

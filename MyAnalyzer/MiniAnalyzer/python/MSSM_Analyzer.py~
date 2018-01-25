@@ -3,7 +3,7 @@ import FWCore.ParameterSet.Config as cms
 
 process = cms.Process("Analysis")
 
-mc = cms.bool(False)
+mc = cms.bool(True)
 signal = cms.bool(False)
 useCrab = cms.bool(False)
 
@@ -23,7 +23,7 @@ else:
     process.GlobalTag.globaltag = globaltag_data    
 
 
-process.maxEvents = cms.untracked.PSet( input = cms.untracked.int32(1000) )
+process.maxEvents = cms.untracked.PSet( input = cms.untracked.int32(-1) )
 
 process.source = cms.Source("PoolSource",
                             duplicateCheckMode = cms.untracked.string("noDuplicateCheck"),
@@ -43,9 +43,9 @@ process.source = cms.Source("PoolSource",
        # '/store/mc/RunIISummer16MiniAODv2/DYJetsToLL_M-50_TuneCUETP8M1_13TeV-madgraphMLM-pythia8/MINIAODSIM/PUMoriond17_80X_mcRun2_asymptotic_2016_TrancheIV_v6_ext1-v2/120000/02A210D6-F5C3-E611-B570-008CFA197BD4.root')
                             #fileNames = cms.untracked.vstring('/store/mc/RunIISummer16MiniAODv2/DYJetsToLL_M-50_TuneCUETP8M1_13TeV-amcatnloFXFX-pythia8/MINIAODSIM/PUMoriond17_HCALDebug_80X_mcRun2_asymptotic_2016_TrancheIV_v6-v1/50000/207B2E7F-01BE-E611-A7D7-002590AB3A70.root')
                             
-                            fileNames = cms.untracked.vstring('/store/data/Run2017D/SingleMuon/MINIAOD/17Nov2017-v1/00000/E0A2AAFA-51F1-E711-9128-7CD30ABD2776.root')
+                            #fileNames = cms.untracked.vstring('/store/data/Run2016H/SingleMuon/MINIAOD/03Feb2017_ver2-v1/110000/00633FF0-85EA-E611-811C-001E674FB25C.root')
 
-                            #fileNames = cms.untracked.vstring('/store/mc/RunIIFall17MiniAOD/DYJetsToLL_M-50_TuneCP5_13TeV-amcatnloFXFX-pythia8/MINIAODSIM/94X_mc2017_realistic_v10-v1/00000/005DC030-D3F4-E711-889A-02163E01A62D.root')
+                            fileNames = cms.untracked.vstring('/store/mc/RunIIFall17MiniAOD/DYJetsToLL_M-50_TuneCP5_13TeV-amcatnloFXFX-pythia8/MINIAODSIM/94X_mc2017_realistic_v10-v1/00000/005DC030-D3F4-E711-889A-02163E01A62D.root')
                             
                             )
 
@@ -64,8 +64,7 @@ if mc:
 process.unpackedPatTrigger = cms.EDProducer("PATTriggerObjectStandAloneUnpacker", 
                                             #patTriggerObjectsStandAlone = cms.InputTag( 'selectedPatTrigger' ),
                                             patTriggerObjectsStandAlone = cms.InputTag( 'slimmedPatTrigger' ),  
-                                            triggerResults = triggerResults,
-                                            unpackFilterLabels = cms.bool(True)
+                                            triggerResults = triggerResults
                                             )
 
 process.muonMatchHLTL3 = cms.EDProducer("PATTriggerMatcherDRLessByR",
@@ -199,11 +198,11 @@ process.analysis = cms.EDAnalyzer("MiniAnalyzer",
                                   #Trigger_path = path_name,
                                   Trigger_filter = filter_name,
                                                        
-                                  pathNames_lowIsoUnpr = cms.string("HLT_IsoMu27_v*"), 
+                                  pathNames_lowIsoUnpr = cms.string("HLT_IsoMu50_v*"), 
                                   pathNames_lowUnpr = cms.string("HLT_Mu50_v*"), 
                                   
                                   crab = useCrab,
-                                  debug = cms.bool(True),
+                                  debug = cms.bool(False),
                                   Trigger_debug = cms.bool(False),
                                   
                                   MCtruth = mc,
